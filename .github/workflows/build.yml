@@ -51,21 +51,38 @@ jobs:
       - name: Build release_mini APK (unsigned, minified)
         run: ./gradlew :pio:assembleRelease_mini --stacktrace
 
+      - name: Check for signing secrets
+        id: signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Decode signing keystore
-        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
-        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > release.keystore
+        if: steps.signing.outputs.enabled == 'true'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: echo "$KEYSTORE_BASE64" | base64 -d > release.keystore
 
       - name: Sign release_mini APK
-        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        if: steps.signing.outputs.enabled == 'true'
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
         run: |
           BUILD_TOOLS="$ANDROID_HOME/build-tools/28.0.3"
           UNSIGNED_APK=$(find pio/build/outputs/apk/release_mini -name "*.apk" | head -n1)
           "$BUILD_TOOLS/zipalign" -p -f 4 "$UNSIGNED_APK" pio-release_mini-aligned.apk
           "$BUILD_TOOLS/apksigner" sign \
             --ks release.keystore \
-            --ks-pass pass:"${{ secrets.KEYSTORE_PASSWORD }}" \
-            --key-pass pass:"${{ secrets.KEY_PASSWORD }}" \
-            --ks-key-alias "${{ secrets.KEY_ALIAS }}" \
+            --ks-pass pass:"$KEYSTORE_PASSWORD" \
+            --key-pass pass:"$KEY_PASSWORD" \
+            --ks-key-alias "$KEY_ALIAS" \
             --out pio-release_mini-signed.apk \
             pio-release_mini-aligned.apk
           rm -f release.keystore
@@ -83,7 +100,7 @@ jobs:
           path: pio/build/outputs/apk/release_mini/*.apk
 
       - name: Upload signed release_mini APK
-        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        if: steps.signing.outputs.enabled == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: dna-release_mini-apk-signed
