@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<resource dir="file:///android_asset/samples" /> 
+<group>
+    <action auto-off="true">
+          <title>选择项目</title>
+          <set>echo $TSL > $TMPDIR/DNA.ini</set>
+          <summary sh="echo '当前项目: /sdcard/DNA' ;cat $TMPDIR/DNA.ini"/>          
+          <param name="TSL" options-sh="samples/project.sh CK" required="true"/>
+    </action>
+   
+    <action reload="true" auto-off="true">
+           <title>删除项目</title>
+           <set>samples/project.sh SC</set>
+           <param name="TSS"  multiple="true" options-sh="samples/project.sh CK" required="true"/>
+    </action>
+    
+    <action reload="true" auto-off="true">
+           <title>新建项目</title>
+           <set>samples/project.sh XJ</set>
+           <param name="T" placeholder="请输入项目名称（请勿使用中文）：" required="true"/>
+    </action>
+    
+    <action reload="true" interruptible="false">
+           <title>解压 ROM</title>
+           <set>dna unzip --delete $silence $DNA_DIR/$ZIP $DNA_DIR</set>
+           <param name="silence" label="删除源文件" type="checkbox" />
+           <param name="ZIP" title="请选择 zip 文件：" options-sh="samples/findfile.sh zip1" desc="请将您的文件放入 /sdcard/DNA 项目路径中" required="true"/>
+    </action>
+
+    <page title="项目菜单" config="file:///android_asset/kr-script/dna.xml">
+            <lock>
+                if [[ -f $TMPDIR/DNA.ini ]]; then
+                    echo 'unlocked'
+                else
+                    echo '请先创建一个项目'
+                fi
+            </lock>
+    </page>
+</group>
+
+<group>
+    <text>
+        <slices>
+            <slice size="18" color="#ffffffff">免责声明</slice>
+            <slice break="true"></slice>
+            <slice size="10" color="#ffffffff">本应用对系统发生的任何意外概不负责。用户需对因任何操作所造成的后果承担全部责任。</slice>
+            <slice break="true"></slice>
+            <slice size="10" color="#ffffffff">喜欢就用，不喜欢就卸载。</slice>
+            <slice break="true"></slice>
+            <slice size="10" color="#ffffffff">如果您在使用过程中遇到任何问题，请联系我修复，QQ：903501507</slice>
+        </slices>
+    </text>
+</group>

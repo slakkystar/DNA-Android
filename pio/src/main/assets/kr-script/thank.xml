@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<root>
+    <group title="特别感谢以下各位，排名不分先后，如有遗漏请告知。">
+        <page link="https://github.com/helloklf/kr-scripts">
+            <title>「kr-scripts」、Github：helloklf | Coolapk：嘟嘟斯基</title>
+            <desc>此应用程序基于“kr-scripts”框架，原软件名称为：“PIO”。</desc>
+        </page>
+        <page link="">
+            <title>TIK Toolbox Group</title>
+            <desc>感谢各位组员的测试和帮助，我无法一一列举。</desc>
+        </page>
+        <page link="https://gitee.com/yeliqin666/TIK">
+            <title>TIK Toolbox</title>
+            <desc>部分代码取自 TIK2 源代码，谢谢。</desc>
+        </page>
+        <page link="https://github.com/topjohnwu/Magisk">
+            <title>magiskboot</title>
+        </page>
+        <page link="https://github.com/xpirt">
+           <title>sdat2img and img2sdat</title>
+        </page>
+        <page link="https://github.com/sekaiacg/erofs-extract">
+           <title>erofs-extract</title>
+        </page>
+        <page link="https://gitee.com/sharpeter/DNA">
+           <title>DNA</title>
+           <desc>I used the name of @温柔的悲好大佬's DNA toolbox to pay tribute to him！</desc>
+        </page>
+        <page link="">
+           <title>Computer Assistant</title>
+           <desc>助手的原作者是：@情非得矣c，我们使用了该工具中的一些代码！</desc>
+        </page>
+        <page link="https://github.com/affggh/fspatch">
+           <title>affggh</title>
+           <desc>@affggh's fspatch.py 修补权限文件和 GitHub 开源工具</desc>
+        </page>
+    </group>
+
+</root>
