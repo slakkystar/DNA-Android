@@ -18,7 +18,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up JDK 8
+      - name: Set up JDK 17 (for sdkmanager)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up JDK 8 (for Gradle/AGP build)
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
@@ -36,8 +42,12 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        env:
+          JAVA_HOME: ${{ env.JAVA_HOME_17_X64 }}
 
       - name: Install required SDK components
+        env:
+          JAVA_HOME: ${{ env.JAVA_HOME_17_X64 }}
         run: |
           yes | sdkmanager --licenses > /dev/null || true
           sdkmanager "platforms;android-28" "build-tools;28.0.3" "platform-tools"
