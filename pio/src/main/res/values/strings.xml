@@ -52,4 +52,18 @@
     <string name="home_mem">RAM</string>
     <string name="home_swap">swap</string>
     <string name="file_error">There are no files in this directory!</string>
+    
+    <string name="power_select_action">选择操作</string>
+    <string name="power_shutdown">关机</string>
+    <string name="power_shutdown_normal">正常关机</string>
+    <string name="power_reboot">重启</string>
+    <string name="power_reboot_normal">正常重启</string>
+    <string name="power_reboot_hot">热重启</string>
+    <string name="power_reboot_hot_desc">只重启系界面而不重新引导系统（可能引发Bug）</string>
+    <string name="power_reboot_recovery_desc">重启到Recovery模式（俗称卡刷模式）</string>
+    <string name="power_reboot_fastboot_desc">重启到Fastboot模式（俗称USB线刷模式）</string>
+    <string name="power_reboot_edl_desc">重启到9008模式，*此模式仅限部分骁龙设备可用</string>
+    <string name="home_physical_memory">物理内存</string>
+    <string name="home_swap_partition">交换分区</string>
+    <string name="home_cpu_cores">核心数</string>
 </resources>

@@ -63,4 +63,5 @@
     <string formatted="false" name="kr_sdk_discrepancy_message">此功能只在SDK%d的系统运行</string>
     <string name="picker_not_item">暂无可用选项！</string>
     <string name="picker_select_none">未选中任何一项！</string>
+    <string name="kr_params_required_hint">需要你输入以下参数才能继续执行</string>
 </resources>
