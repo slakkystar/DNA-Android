@@ -19,13 +19,6 @@
            <set>samples/project.sh XJ</set>
            <param name="T" placeholder="请输入项目名称（请勿使用中文）：" required="true"/>
     </action>
-    
-    <action reload="true" interruptible="false">
-           <title>解压 ROM</title>
-           <set>dna unzip --delete $silence $DNA_DIR/$ZIP $DNA_DIR</set>
-           <param name="silence" label="删除源文件" type="checkbox" />
-           <param name="ZIP" title="请选择 zip 文件：" options-sh="samples/findfile.sh zip1" desc="请将您的文件放入 /sdcard/DNA 项目路径中" required="true"/>
-    </action>
 
     <page title="项目菜单" config="file:///android_asset/kr-script/dna.xml">
             <lock>
