@@ -20,8 +20,8 @@
     <string name="engine_version_name">基于[Kr-Script4.0.3]创作</string>
 
     <string name="tab_home">首页</string>
-    <string name="tab_favorites">收藏夹</string>
-    <string name="tab_pages">全部</string>
+    <string name="tab_favorites">首页</string>
+    <string name="tab_pages">此外</string>
 
     <string name="monitor_laod">负载：%d%%</string>
     <string name="monitor_core_count">%d 核心</string>
