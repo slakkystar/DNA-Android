@@ -47,7 +47,7 @@
             <slice break="true"></slice>
             <slice size="10" color="#ffffffff">喜欢就用，不喜欢就卸载。</slice>
             <slice break="true"></slice>
-            <slice size="10" color="#ffffffff">如果您在使用过程中遇到任何问题，请联系我修复，QQ：903501507</slice>
+            <slice size="10" color="#ffffffff">如果您在使用过程中遇到任何问题，请联系我修复，github：slakkystar</slice>
         </slices>
     </text>
 </group>

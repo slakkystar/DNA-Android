@@ -34,6 +34,10 @@
            <title>affggh</title>
            <desc>@affggh's fspatch.py 修补权限文件和 GitHub 开源工具</desc>
         </page>
+        <page link="https://github.com/slakkystar">
+           <title>Slakky Stars</title>
+           <desc>我决定继续推进这个项目，添加更多功能、翻译等等 </desc>
+        </page>
     </group>
 
 </root>

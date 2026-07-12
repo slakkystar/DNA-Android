@@ -12,11 +12,11 @@
     <string name="please_wait">请稍等</string>
     <string name="title_activity_action_page">功能分页</string>
 
-    <string name="author_name">xxx</string>
+    <string name="author_name">SlakkyStar</string>
     <string name="about_title">关于 · DNA</string>
     <string name="appliction_desc">这是框架演示应用</string>
     <string name="appliction_name">DNA 示例架</string>
-    <string name="appliction_author">作者：嘟嘟ski</string>
+    <string name="appliction_author">Slakkystar</string>
     <string name="engine_version_name">基于[Kr-Script4.0.3]创作</string>
 
     <string name="tab_home">首页</string>
