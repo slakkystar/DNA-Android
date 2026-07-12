@@ -35,6 +35,7 @@ dependencies {
     implementation project(':common') // 添加依赖模块
     implementation project(':krscript') // 添加依赖模块
     implementation 'androidx.constraintlayout:constraintlayout:2.0.1'
+    implementation 'com.github.L-JINBIN:MTDataFilesProvider:v1.0.0'
 }
 repositories {
     mavenCentral()
