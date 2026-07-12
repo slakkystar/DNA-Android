@@ -53,6 +53,8 @@
     <string name="home_swap">swap</string>
     <string name="file_error">There are no files in this directory!</string>
     
+    <string name="tab_instructions">指示</string>
+    
     <string name="power_select_action">选择操作</string>
     <string name="power_shutdown">关机</string>
     <string name="power_shutdown_normal">正常关机</string>

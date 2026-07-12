@@ -70,9 +70,12 @@ class MainActivity : AppCompatActivity() {
         Thread(Runnable {
             val page2Config = krScriptConfig.pageListConfig
             val favoritesConfig = krScriptConfig.favoriteConfig
+            val instructionsConfig = PageNode("")
+            instructionsConfig.pageConfigPath = "file:///android_asset/kr-script/instructions.xml"
 
             val pages = getItems(page2Config)
             val favorites = getItems(favoritesConfig)
+            val instructions = getItems(instructionsConfig)
             handler.post {
                 progressBarDialog.hideDialog()
 
@@ -88,6 +91,13 @@ class MainActivity : AppCompatActivity() {
                     tabIconHelper.newTabSpec(getString(R.string.tab_pages), ContextCompat.getDrawable(this, R.drawable.tab_pages)!!, R.id.main_tabhost_3)
                 } else {
                     main_tabhost_3.visibility = View.GONE
+                }
+
+                if (instructions != null && instructions.size > 0) {
+                    updateInstructionsTab(instructions, instructionsConfig)
+                    tabIconHelper.newTabSpec(getString(R.string.tab_instructions), ContextCompat.getDrawable(this, R.drawable.tab_instructions)!!, R.id.main_tabhost_4)
+                } else {
+                    main_tabhost_4.visibility = View.GONE
                 }
             }
         }).start()
@@ -126,6 +136,11 @@ class MainActivity : AppCompatActivity() {
     private fun updateMoreTab(items: ArrayList<NodeInfoBase>, pageNode: PageNode) {
         val allItemFragment = ActionListFragment.create(items, getKrScriptActionHandler(pageNode, false), null, ThemeModeState.getThemeMode())
         supportFragmentManager.beginTransaction().replace(R.id.list_pages, allItemFragment).commitAllowingStateLoss()
+    }
+
+    private fun updateInstructionsTab(items: ArrayList<NodeInfoBase>, pageNode: PageNode) {
+        val instructionsFragment = ActionListFragment.create(items, getKrScriptActionHandler(pageNode, false), null, ThemeModeState.getThemeMode())
+        supportFragmentManager.beginTransaction().replace(R.id.list_instructions, instructionsFragment).commitAllowingStateLoss()
     }
 
     private fun reloadFavoritesTab() {

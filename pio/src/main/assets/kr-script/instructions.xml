@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<page>
+    <page title="固件解包及其所有功能" config="kr-script/instructions/unpack.xml" />
+    <page title="固件打包及其所有特性" config="kr-script/instructions/repack.xml" />
+<!--    <page title="各类固件移植指南" config="kr-script/instructions/porting.xml" /> -->
+</page>
