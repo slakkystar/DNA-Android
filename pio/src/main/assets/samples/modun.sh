@@ -1,4 +1,4 @@
-If [ ! -e $START_DIR/module ];then
+if [ ! -e $START_DIR/module ];then
   mkdir -p $START_DIR/module
   chmod -R 755 $START_DIR/module
   chown -R $APP_USER_ID:$APP_USER_ID $START_DIR/module
