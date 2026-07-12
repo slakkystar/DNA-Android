@@ -15,15 +15,6 @@
         <param name="Brush_in" type="file" suffix="img" editable="true" required="true" title="您可以输入 img 文件的绝对路径，或使用文件选择器选择文件" desc="提示：您可以使用 [MT 管理器] 长按目录或文件 --> 点击属性 --> 点击目录以复制该目录的绝对路径，长按目录或长按名称以复制文件的绝对路径。" required="true"/>
     </action>
 </group>
-<group>
-    <action>
-        <title>脚本执行器</title>
-        <summary>自定义命令</summary>
-        <set>samples/shell.sh</set>
-        <param name="TO" placeholder="自定义命令" value-sh="cat $START_DIR/SHE.sh" requiret="true" />
-        <param name="shell" placeholder="自定义命令" value="" requiret="true" />
-    </action>
-</group>
 <group title="关于工具">
     <page title="特别鸣谢" config="file:///android_asset/kr-script/thank.xml" />
 </group>
