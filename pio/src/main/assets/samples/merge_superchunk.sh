@@ -13,15 +13,15 @@ for prefix in $IMG; do
     {
         read -r files
         cd $DNA_PRO
-        echo "> 开始将文件合并到：$prefix"
+        echo "> Начинаю объединение файлов в: $prefix"
         simg2img ${files% } $DNA_PRO/out/$prefix
         cd
         if [ -f $DNA_PRO/out/$prefix ];then
-            echo "> 转换完成，文件位于：$DNA_PRO/out/$prefix"
+            echo "> Объединение завершено, файл находится: $DNA_PRO/out/$prefix"
         else
-            echo "DEBUG: > 处理独立前缀 '$prefix'" >&2
-            echo "DEBUG: > 生成正则模式 '$pattern'" >&2
-            echo "DEBUG: > 处理'${files% }'失败，请截图联系开发者修复" >&2
+            echo "DEBUG: > Обработка отдельного префикса '$prefix'" >&2
+            echo "DEBUG: > Сгенерированное регулярное выражение '$pattern'" >&2
+            echo "DEBUG: > Обработка '${files% }' не удалась, сделайте скриншот и свяжитесь с разработчиком для исправления" >&2
         fi
     }
 done

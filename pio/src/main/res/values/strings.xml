@@ -1,45 +1,45 @@
 <resources>
-    <!--重要内容，谨慎修改-->
+    <!--Важное содержимое, изменять с осторожностью-->
     <string name="kr_script_config">kr-script.conf</string>
 
-    <!--是否强制获取ROOT-->
+    <!--Принудительно запрашивать ROOT-->
     <bool name="force_root">false</bool>
 
     <string name="app_name">DNA-Android</string>
-    <string name="btn_exit">退出</string>
-    <string name="float_monitor_tips">双击悬浮窗即可关闭，或按住拖动调整位置</string>
-    <string name="permission_float">请授权显示悬浮窗权限！</string>
-    <string name="please_wait">请稍等</string>
-    <string name="title_activity_action_page">功能分页</string>
+    <string name="btn_exit">Выход</string>
+    <string name="float_monitor_tips">Дважды нажмите на плавающее окно, чтобы закрыть, или удерживайте и перетаскивайте для изменения положения</string>
+    <string name="permission_float">Пожалуйста, предоставьте разрешение на отображение поверх других окон!</string>
+    <string name="please_wait">Пожалуйста, подождите</string>
+    <string name="title_activity_action_page">Страницы функций</string>
 
     <string name="author_name">SlakkyStar</string>
-    <string name="about_title">关于 · DNA</string>
-    <string name="appliction_desc">这是框架演示应用</string>
-    <string name="appliction_name">DNA 示例架</string>
+    <string name="about_title">О программе · DNA</string>
+    <string name="appliction_desc">Это демонстрационное приложение фреймворка</string>
+    <string name="appliction_name">DNA Демо-фреймворк</string>
     <string name="appliction_author">Slakkystar</string>
-    <string name="engine_version_name">基于[Kr-Script4.0.3]创作</string>
+    <string name="engine_version_name">Создано на базе [Kr-Script4.0.3]</string>
 
-    <string name="tab_home">首页</string>
-    <string name="tab_favorites">首页</string>
-    <string name="tab_pages">此外</string>
+    <string name="tab_home">Главная</string>
+    <string name="tab_favorites">Избранное</string>
+    <string name="tab_pages">Другое</string>
 
-    <string name="monitor_laod">负载：%d%%</string>
-    <string name="monitor_core_count">%d 核心</string>
-    <string name="monitor_cache_cleared">已回收用于缓存的RAM</string>
-    <string name="monitor_ram_cleared">RAM碎片已整理</string>
+    <string name="monitor_laod">Нагрузка: %d%%</string>
+    <string name="monitor_core_count">%d ядер</string>
+    <string name="monitor_cache_cleared">Кэш-память освобождена</string>
+    <string name="monitor_ram_cleared">Фрагментация ОЗУ устранена</string>
 
-    <string name="copy_success">复制成功</string>
-    <string name="btn_retry">重试</string>
+    <string name="copy_success">Скопировано успешно</string>
+    <string name="btn_retry">Повторить</string>
 
-    <string name="pio_starting">DNA·STARTING</string>
-    <string name="pop_before_start">正准备启动应用…</string>
-    <string name="pop_started">启动完成！</string>
-    <string name="pio_permission_checking">检查并获取必需权限……</string>
-    <string name="error_root">未能获得ROOT授权，如果你的手机已经ROOT，清在授权管理器弹出对话框时选择允许！</string>
-    <string name="error_su_timeout">等待ROOT授权超时，请检查授权管理器是否在后台运行！</string>
-    <string name="transparent_ui">界面透明 </string>
-    <string name="title_activity_file_selector">请选择文件</string>
-    <string name="title_activity_folder_selector">请长按选择目录</string>
+    <string name="pio_starting">DNA·ЗАПУСК</string>
+    <string name="pop_before_start">Подготовка к запуску приложения…</string>
+    <string name="pop_started">Запуск завершён!</string>
+    <string name="pio_permission_checking">Проверка и получение необходимых разрешений……</string>
+    <string name="error_root">Не удалось получить ROOT-доступ. Если ваше устройство имеет ROOT, выберите «Разрешить» при появлении диалогового окна в менеджере разрешений!</string>
+    <string name="error_su_timeout">Время ожидания ROOT-доступа истекло, проверьте, запущен ли менеджер разрешений в фоновом режиме!</string>
+    <string name="transparent_ui">Прозрачный интерфейс</string>
+    <string name="title_activity_file_selector">Пожалуйста, выберите файл</string>
+    <string name="title_activity_folder_selector">Пожалуйста, используйте долгое нажатие для выбора папки</string>
 
     <string name="power_shutdown_cmd">sync;svc power shutdown || reboot -p;</string>
     <string name="power_reboot_cmd">sync;svc power reboot || reboot;</string>
@@ -47,25 +47,25 @@
     <string name="power_fastboot_cmd">sync;reboot bootloader;</string>
     <string name="power_recovery_cmd">sync;reboot recovery;</string>
     <string name="power_emergency_cmd">sync;reboot edl;</string>
-    <string name="Startup_file_selection_erreo">Failed to start built-in file selector</string>
+    <string name="Startup_file_selection_erreo">Не удалось запустить встроенный выбор файлов</string>
 
-    <string name="home_mem">RAM</string>
+    <string name="home_mem">ОЗУ</string>
     <string name="home_swap">swap</string>
-    <string name="file_error">There are no files in this directory!</string>
+    <string name="file_error">В этой папке нет файлов!</string>
     
-    <string name="tab_instructions">指示</string>
+    <string name="tab_instructions">Инструкции</string>
     
-    <string name="power_select_action">选择操作</string>
-    <string name="power_shutdown">关机</string>
-    <string name="power_shutdown_normal">正常关机</string>
-    <string name="power_reboot">重启</string>
-    <string name="power_reboot_normal">正常重启</string>
-    <string name="power_reboot_hot">热重启</string>
-    <string name="power_reboot_hot_desc">只重启系界面而不重新引导系统（可能引发Bug）</string>
-    <string name="power_reboot_recovery_desc">重启到Recovery模式（俗称卡刷模式）</string>
-    <string name="power_reboot_fastboot_desc">重启到Fastboot模式（俗称USB线刷模式）</string>
-    <string name="power_reboot_edl_desc">重启到9008模式，*此模式仅限部分骁龙设备可用</string>
-    <string name="home_physical_memory">物理内存</string>
-    <string name="home_swap_partition">交换分区</string>
-    <string name="home_cpu_cores">核心数</string>
+    <string name="power_select_action">Выберите действие</string>
+    <string name="power_shutdown">Выключение</string>
+    <string name="power_shutdown_normal">Обычное выключение</string>
+    <string name="power_reboot">Перезагрузка</string>
+    <string name="power_reboot_normal">Обычная перезагрузка</string>
+    <string name="power_reboot_hot">Горячая перезагрузка</string>
+    <string name="power_reboot_hot_desc">Перезапуск только системного интерфейса без перезагрузки системы (может вызвать ошибки)</string>
+    <string name="power_reboot_recovery_desc">Перезагрузка в Recovery (режим восстановления)</string>
+    <string name="power_reboot_fastboot_desc">Перезагрузка в Fastboot (режим прошивки по USB)</string>
+    <string name="power_reboot_edl_desc">Перезагрузка в режим 9008, *этот режим доступен только на некоторых устройствах Snapdragon</string>
+    <string name="home_physical_memory">Физическая память</string>
+    <string name="home_swap_partition">Раздел подкачки</string>
+    <string name="home_cpu_cores">Количество ядер</string>
 </resources>

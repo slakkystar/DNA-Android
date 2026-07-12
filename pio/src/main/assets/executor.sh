@@ -1,18 +1,18 @@
 #!/system/bin/sh
 
-# 环境变量
+# Переменные окружения
 export PATH="$({TOOLKIT}):$PATH"
 export START_DIR="$({START_DIR})"
 export TEMP_DIR="$({TEMP_DIR})"
 export TMPDIR="$TEMP_DIR"
 export APP_USER_ID="$({APP_USER_ID})"
-# 判断是否有指定执行目录，跳转到起始目录
+# Определить, указан ли рабочий каталог, и перейти в начальный каталог
 if [[ "$START_DIR" != "" ]] && [[ -d "$START_DIR" ]]
 then
     cd "$START_DIR"
 fi
 
-# 工具目录
+# Каталог инструментов
 export DNA_DIR=$({SDCARD_PATH})/DNA
 if [ ! -d $DNA_DIR ];then
    mkdir -p $DNA_DIR
@@ -28,11 +28,11 @@ if [ -f $TMPDIR/DNA.ini ]; then
   export DNA_DRO=$DNA_TMP/$project
 fi
 chown -R $APP_USER_ID:$APP_USER_ID $START_DIR
-# 运行脚本
+# Запустить скрипт
 if [[ -f "$1" ]]; then
     chmod 755 "$1"
     source "$1"
 else
-    echo "${1} Lost" 1>&2
+    echo "${1} утерян" 1>&2
 fi
 exit 0

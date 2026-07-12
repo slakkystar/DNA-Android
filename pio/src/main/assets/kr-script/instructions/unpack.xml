@@ -1,48 +1,48 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <page>
     <text>
-        <slice size="22" bold="true" break="true">固件解包</slice>
-        <slice break="true">支持多种文件格式：payload.bin、.img、.dat/.br 和 super.img。</slice>
-        <slice break="true" color="#ff9500">在解包任何格式之前，请将文件放入 /storage/emulated/0/DNA/DNA_{项目名称}/</slice>
-        <slice break="true">之后，在菜单中选择与你的文件格式相对应的解包选项。</slice>
+        <slice size="22" bold="true" break="true">Распаковка прошивки</slice>
+        <slice break="true">Поддерживается несколько форматов файлов: payload.bin, .img, .dat/.br и super.img.</slice>
+        <slice break="true" color="#ff9500">Перед распаковкой любого из форматов помести файл в /storage/emulated/0/DNA/DNA_{имя проекта}/</slice>
+        <slice break="true">После этого выбери в меню пункт распаковки, соответствующий формату твоего файла.</slice>
     </text>
 
     <text>
-        <slice size="20" bold="true" break="true">解包 payload.bin</slice>
-        <slice break="true">解包 payload 时有两个选项可用：</slice>
-        <slice bold="true" break="true">• 自动解包提取的 IMG</slice>
-        <slice break="true">从 payload.bin 中提取的所有 .img 文件将立即被进一步解包（无需另外手动启动解包）。</slice>
-        <slice bold="true" break="true">• 完成后删除源文件</slice>
-        <slice break="true">在所有解包操作完成后，原 payload.bin 文件将被自动删除。</slice>
+        <slice size="20" bold="true" break="true">Распаковка payload.bin</slice>
+        <slice break="true">При распаковке payload доступны две опции:</slice>
+        <slice bold="true" break="true">• Автоматически распаковывать извлечённые IMG</slice>
+        <slice break="true">Все .img файлы, извлечённые из payload.bin, будут сразу же дополнительно распакованы (без отдельного повторного запуска распаковки).</slice>
+        <slice bold="true" break="true">• Удалить исходный файл после завершения</slice>
+        <slice break="true">Исходный payload.bin будет автоматически удалён после завершения всех операций распаковки.</slice>
     </text>
 
     <text>
-        <slice size="20" bold="true" break="true">解包 .dat / .dat.br</slice>
-        <slice break="true">这种格式常用于非动态分区（non-dynamic）系统（无 super 分区）。</slice>
-        <slice break="true">仅有一个选项可用——“完成后删除源文件”：解包后，原 .dat 和 .dat.br 文件将被删除。</slice>
+        <slice size="20" bold="true" break="true">Распаковка .dat / .dat.br</slice>
+        <slice break="true">Такой формат часто используется в non-dynamic системах (без super-раздела).</slice>
+        <slice break="true">Доступна только одна опция — "Удалить исходный файл после завершения": после распаковки исходные .dat и .dat.br файлы будут удалены.</slice>
     </text>
 
     <text>
-        <slice size="20" bold="true" break="true">解包 .img</slice>
-        <slice break="true">工作原理与 .dat/.br 几乎相同——提供一个“完成后删除源文件”选项（解包后删除原 .img 文件）。</slice>
-        <slice break="true" bold="true">支持的分区：</slice>
-        <slice break="true">boot、system/vendor（以及它们的所有子分区——sys_ext、product、odm 等）、userdata/metadata</slice>
-        <slice break="true" bold="true">支持的文件系统格式：</slice>
-        <slice break="true">ext4、erofs、f2fs、kernel</slice>
+        <slice size="20" bold="true" break="true">Распаковка .img</slice>
+        <slice break="true">Работает почти так же, как .dat/.br — доступна одна опция "Удалить исходный файл после завершения" (удаляет исходный .img после распаковки).</slice>
+        <slice break="true" bold="true">Поддерживаемые разделы:</slice>
+        <slice break="true">boot, system/vendor (и все их суб-версии — sys_ext, product, odm и т.д.), userdata/metadata</slice>
+        <slice break="true" bold="true">Поддерживаемые форматы файловой системы:</slice>
+        <slice break="true">ext4, erofs, f2fs, kernel</slice>
     </text>
 
     <text>
-        <slice size="20" bold="true" break="true">解包 super.img</slice>
-        <slice break="true">与 payload 类似，有两个选项可用：</slice>
-        <slice bold="true" break="true">• 自动解包提取的 IMG</slice>
-        <slice break="true">从 super.img 中提取的所有分区将立即被进一步解包。</slice>
-        <slice bold="true" break="true">• 完成后删除源文件</slice>
-        <slice break="true">在所有操作完成后，原 super.img 文件将被删除。</slice>
+        <slice size="20" bold="true" break="true">Распаковка super.img</slice>
+        <slice break="true">Как и с payload, доступны две опции:</slice>
+        <slice bold="true" break="true">• Автоматически распаковывать извлечённые IMG</slice>
+        <slice break="true">Все разделы, извлечённые из super.img, будут сразу же дополнительно распакованы.</slice>
+        <slice bold="true" break="true">• Удалить исходный файл после завершения</slice>
+        <slice break="true">Исходный super.img будет удалён после завершения всех операций.</slice>
     </text>
 
     <text>
-        <slice size="20" bold="true" break="true">重要特性</slice>
-        <slice break="true" color="#ff3b30">所有 .img 文件均无法在 sparse 格式下直接解包——仅支持 raw 格式。</slice>
-        <slice break="true">如果你尝试解包 sparse 镜像，应用会自动将其转换为 raw 格式并继续解包——无需手动另行转换。</slice>
+        <slice size="20" bold="true" break="true">Важная особенность</slice>
+        <slice break="true" color="#ff3b30">Все .img файлы не могут быть распакованы в sparse-формате — поддерживается только raw.</slice>
+        <slice break="true">Если ты попытаешься распаковать sparse-образ, приложение автоматически сконвертирует его в raw и продолжит распаковку — отдельно делать это вручную не нужно.</slice>
     </text>
 </page>

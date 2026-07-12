@@ -1,42 +1,42 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <root>
-    <group title="特别感谢以下各位，排名不分先后，如有遗漏请告知。">
+    <group title="Особая благодарность следующим людям, порядок не имеет значения. Если кого-то упустил — дайте знать.">
         <page link="https://github.com/helloklf/kr-scripts">
-            <title>「kr-scripts」、Github：helloklf | Coolapk：嘟嘟斯基</title>
-            <desc>此应用程序基于“kr-scripts”框架，原软件名称为：“PIO”。</desc>
+            <title>«kr-scripts», Github: helloklf | Coolapk: 嘟嘟斯基</title>
+            <desc>Это приложение основано на фреймворке «kr-scripts», оригинальное название программы: «PIO».</desc>
         </page>
         <page link="">
             <title>TIK Toolbox Group</title>
-            <desc>感谢各位组员的测试和帮助，我无法一一列举。</desc>
+            <desc>Спасибо всем участникам группы за тестирование и помощь, всех не перечислить.</desc>
         </page>
         <page link="https://gitee.com/yeliqin666/TIK">
             <title>TIK Toolbox</title>
-            <desc>部分代码取自 TIK2 源代码，谢谢。</desc>
+            <desc>Часть кода взята из исходников TIK2, спасибо.</desc>
         </page>
         <page link="https://github.com/topjohnwu/Magisk">
             <title>magiskboot</title>
         </page>
         <page link="https://github.com/xpirt">
-           <title>sdat2img and img2sdat</title>
+           <title>sdat2img и img2sdat</title>
         </page>
         <page link="https://github.com/sekaiacg/erofs-extract">
            <title>erofs-extract</title>
         </page>
         <page link="https://gitee.com/sharpeter/DNA">
            <title>DNA</title>
-           <desc>I used the name of @温柔的悲好大佬's DNA toolbox to pay tribute to him！</desc>
+           <desc>Я использовал название DNA toolbox уважаемого @温柔的悲好, отдавая дань уважения!</desc>
         </page>
         <page link="">
            <title>Computer Assistant</title>
-           <desc>助手的原作者是：@情非得矣c，我们使用了该工具中的一些代码！</desc>
+           <desc>Автор оригинала: @情非得矣c, мы использовали часть кода из этого инструмента!</desc>
         </page>
         <page link="https://github.com/affggh/fspatch">
            <title>affggh</title>
-           <desc>@affggh's fspatch.py 修补权限文件和 GitHub 开源工具</desc>
+           <desc>fspatch.py от @affggh — исправление файлов прав доступа и инструменты с открытым исходным кодом на GitHub</desc>
         </page>
         <page link="https://github.com/slakkystar">
            <title>Slakky Stars</title>
-           <desc>我决定继续推进这个项目，添加更多功能、翻译等等 </desc>
+           <desc>Он решил продолжить развитие этого проекта, добавляя новые функции, переводы и многое другое</desc>
         </page>
     </group>
 

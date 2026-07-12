@@ -1,13 +1,13 @@
 <resources>
-    <string name="execute_success">执行成功</string>
-    <string name="execute_fail">执行失败</string>
-    <string name="execute_wait">正在执行，请稍等…</string>
-    <string name="btn_confirm">确定</string>
-    <string name="app_chooser_search_hint">输入应用名/包名进行搜索</string>
-    <string name="item_chooser_search_hint">搜索可选择项</string>
-    <string name="select_all">全选</string>
-    <string name="help_title">说明提示</string>
-    <string name="dialog_default_title">提示信息</string>
-    <string name="dialog_default_message">提示内容</string>
-    <string name="btn_ok_understood">我知道了</string>
+    <string name="execute_success">Выполнено успешно</string>
+    <string name="execute_fail">Ошибка выполнения</string>
+    <string name="execute_wait">Выполняется, пожалуйста, подождите…</string>
+    <string name="btn_confirm">ОК</string>
+    <string name="app_chooser_search_hint">Введите название/пакет приложения для поиска</string>
+    <string name="item_chooser_search_hint">Поиск доступных опций</string>
+    <string name="select_all">Выбрать всё</string>
+    <string name="help_title">Пояснение</string>
+    <string name="dialog_default_title">Информация</string>
+    <string name="dialog_default_message">Содержимое подсказки</string>
+    <string name="btn_ok_understood">Я понял</string>
 </resources>

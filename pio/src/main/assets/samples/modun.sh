@@ -7,12 +7,12 @@ cat <<Dna
 <?xml version="1.0" encoding="utf-8"?>
 <group>
     <action reload="true" auto-off="true">
-        <title>卸载插件</title>
+        <title>Удалить плагин</title>
         <set>samples/project.sh sub</set>
-        <param name="sub" title="请选择插件：" options-sh="ls -F $START_DIR/module | sed 's/\/$//g'" desc="在插件路径下查找文件" required="true" multiple="true"/>
+        <param name="sub" title="Выберите плагин:" options-sh="ls -F $START_DIR/module | sed 's/\/$//g'" desc="Поиск файлов в пути плагинов" required="true" multiple="true"/>
     </action>
 </group>
-<group title="插件列表">
+<group title="Список плагинов">
 Dna
 
 for var in $(find $START_DIR/module/ -name index.xml);do
