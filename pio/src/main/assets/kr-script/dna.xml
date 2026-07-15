@@ -148,13 +148,59 @@
     </action>
 
     <action>
-        <title>Merge split super</title>
-        <set>$START_DIR/samples/merge_superchunk.sh</set>
-        <desc>Merge segmented IMGs into a complete IMG</desc>
+        <title>Merge split img files into super.img</title>
+    <set>
+     chmod +x "$START_DIR/tools/merge_superchunk"
+     "$START_DIR/tools/merge_superchunk"
+    </set>
+        <desc>Restore the original super.img file</desc>
         <param name="silence" label="Delete source files" type="checkbox" />
-        <param name="IMG" title="Select segmented IMG files" 
+        <param name="IMG" title="Select split IMG files" 
             options-sh="samples/findfile.sh split_sparse" 
-            desc="File detection in the project path /sdcard/DNA" 
+            desc="Detect files in /sdcard/DNA project path" 
             required="true" multiple="true"/>
+    </action>
+
+    <action>
+        <title>Split super.img into multiple parts</title>
+    <set>
+     chmod +x "$START_DIR/tools/seprate_superchunk"
+     "$START_DIR/tools/seprate_superchunk"
+    </set>
+        <desc>Split super.img sparsely into multiple evenly sized parts</desc>
+        <!-- Optional: delete original file -->
+        <param name="silence" label="Delete source files" type="checkbox" />
+        <!-- File selector -->
+        <param name="IMG" title="Select super.img file" 
+               options-sh="samples/findfile.sh img" 
+               desc="Detect .img files in /sdcard/DNA project path" 
+               required="true" multiple="true"/>
+        <!-- Split count dropdown -->
+        <param name="parts" title="Select number of parts (4 to 25):" 
+               desc="Split the selected super.img into evenly sized data chunks" 
+               type="select" required="true">
+            <option value="4">4</option>
+            <option value="5">5</option>
+            <option value="6">6</option>
+            <option value="7">7</option>
+            <option value="8">8</option>
+            <option value="9">9</option>
+            <option value="10">10</option>
+            <option value="11">11</option>
+            <option value="12" selected="true">12</option>
+            <option value="13">13</option>
+            <option value="14">14</option>
+            <option value="15">15</option>
+            <option value="16">16</option>
+            <option value="17">17</option>
+            <option value="18">18</option>
+            <option value="19">19</option>
+            <option value="20">20</option>
+            <option value="21">21</option>
+            <option value="22">22</option>
+            <option value="23">23</option>
+            <option value="24">24</option>
+            <option value="25">25</option>
+        </param>
     </action>
 </group>
