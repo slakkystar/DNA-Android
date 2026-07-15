@@ -148,13 +148,64 @@
     </action>
 
     <action>
-        <title>合并 Sparse 分段</title>
-        <set>$START_DIR/samples/merge_superchunk.sh</set>
-        <desc>将分段的 IMG 合并为完整 IMG</desc>
+        <title>合并分割的img文件为super.img</title>
+    <set>
+     chmod +x "$START_DIR/tools/merge_superchunk"
+     "$START_DIR/tools/merge_superchunk"
+    </set>
+        <desc>恢复原始的super.img文件</desc>
         <param name="silence" label="删除源文件" type="checkbox" />
-        <param name="IMG" title="请选择分段的 IMG 文件" 
+        <param name="IMG" title="请选择分割的IMG文件" 
             options-sh="samples/findfile.sh split_sparse" 
-            desc="识别 /sdcard/DNA 项目路径中的文件" 
+            desc="检测/sdcard/DNA项目路径下的文件" 
             required="true" multiple="true"/>
+    </action>
+    
+    <action>
+        <title>将super.img分割为多个部分</title>
+    
+       <set>
+         chmod +x "$START_DIR/tools/seprate_superchunk"
+         "$START_DIR/tools/seprate_superchunk"
+       </set>
+   
+        <desc>将super.img稀疏分割为大小均匀的多个部分</desc>
+
+        <!-- 可选：删除原始文件 -->
+        <param name="silence" label="删除源文件" type="checkbox" />
+
+        <!-- 文件选择器 -->
+        <param name="IMG" title="请选择super.img文件" 
+               options-sh="samples/findfile.sh img" 
+               desc="检测/sdcard/DNA项目路径下的.img文件" 
+               required="true" multiple="true"/>
+
+        <!-- 分割份数下拉选择 -->
+        <param name="parts" title="选择分割份数（4至25份）：" 
+               desc="将所选super.img分割为大小均匀的数据块" 
+               type="select" required="true">
+            <option value="4">4</option>
+            <option value="5">5</option>
+            <option value="6">6</option>
+            <option value="7">7</option>
+            <option value="8">8</option>
+            <option value="9">9</option>
+            <option value="10">10</option>
+            <option value="11">11</option>
+            <option value="12" selected="true">12</option>
+            <option value="13">13</option>
+            <option value="14">14</option>
+            <option value="15">15</option>
+            <option value="16">16</option>
+            <option value="17">17</option>
+            <option value="18">18</option>
+            <option value="19">19</option>
+            <option value="20">20</option>
+            <option value="21">21</option>
+            <option value="22">22</option>
+            <option value="23">23</option>
+            <option value="24">24</option>
+            <option value="25">25</option>
+        </param>
     </action>
 </group>
