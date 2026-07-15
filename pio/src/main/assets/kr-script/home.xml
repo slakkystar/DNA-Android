@@ -2,30 +2,30 @@
 <resource dir="file:///android_asset/samples" /> 
 <group>
     <action auto-off="true">
-          <title>选择项目</title>
+          <title>Select Project</title>
           <set>echo $TSL > $TMPDIR/DNA.ini</set>
-          <summary sh="echo '当前项目: /sdcard/DNA' ;cat $TMPDIR/DNA.ini"/>          
+          <summary sh="echo 'Current project: /sdcard/DNA' ;cat $TMPDIR/DNA.ini"/>          
           <param name="TSL" options-sh="samples/project.sh CK" required="true"/>
     </action>
    
     <action reload="true" auto-off="true">
-           <title>删除项目</title>
+           <title>Delete Project</title>
            <set>samples/project.sh SC</set>
            <param name="TSS"  multiple="true" options-sh="samples/project.sh CK" required="true"/>
     </action>
     
     <action reload="true" auto-off="true">
-           <title>新建项目</title>
+           <title>Create Project</title>
            <set>samples/project.sh XJ</set>
-           <param name="T" placeholder="请输入项目名称（请勿使用中文）：" required="true"/>
+           <param name="T" placeholder="Enter project name (do not use Chinese characters):" required="true"/>
     </action>
 
-    <page title="项目菜单" config="file:///android_asset/kr-script/dna.xml">
+    <page title="Project Menu" config="file:///android_asset/kr-script/dna.xml">
             <lock>
                 if [[ -f $TMPDIR/DNA.ini ]]; then
                     echo 'unlocked'
                 else
-                    echo '请先创建一个项目'
+                    echo 'Please create a project first'
                 fi
             </lock>
     </page>
@@ -34,13 +34,13 @@
 <group>
     <text>
         <slices>
-            <slice size="18" color="#ffffffff">免责声明</slice>
+            <slice size="18" color="#ffffffff">Disclaimer</slice>
             <slice break="true"></slice>
-            <slice size="10" color="#ffffffff">本应用对系统发生的任何意外概不负责。用户需对因任何操作所造成的后果承担全部责任。</slice>
+            <slice size="10" color="#ffffffff">The application is not responsible for any unforeseen consequences to the system. The user bears full responsibility for the result of any actions.</slice>
             <slice break="true"></slice>
-            <slice size="10" color="#ffffffff">喜欢就用，不喜欢就卸载。</slice>
+            <slice size="10" color="#ffffffff">If you like it — use it, if not — delete it.</slice>
             <slice break="true"></slice>
-            <slice size="10" color="#ffffffff">如果您在使用过程中遇到任何问题，请联系我修复，github：slakkystar</slice>
+            <slice size="10" color="#ffffffff">If you encounter any issues while using, contact me for fixes, github: slakkystar</slice>
         </slices>
     </text>
 </group>

@@ -1,5 +1,5 @@
-#本脚本由　by Han | 情非得已c，编写
-#应用于搞机助手上
+#This script is written by Han | 情非得已c
+#Used in Computer Assistant
 name(){
 jian="$TEMP_DIR/by_name.log"
 if [[ ! -f $jian ]]; then
@@ -23,7 +23,7 @@ if [[ ! -f $jian ]]; then
                 elif [[ $size -le 1024 ]]; then
                     File_Type=${size}b
                 fi
-                    echo "$BLOCK|$Row 「大小：$File_Type」" >>$jian
+                    echo "$BLOCK|$Row 「Size: $File_Type」" >>$jian
             else
                 echo "$BLOCK|$Row" >>$jian
             fi
@@ -41,11 +41,11 @@ for i in $IMG; do
     e=${i##*/}
     File="$Extract/${e}.img"
     if [[ ! -L $i ]];then
-        echo "！未找到 $e 分区，无法提取"
+        echo "！Partition $e not found, cannot extract"
     else
-        echo "- 正在提取 $e 分区"
+        echo "- Extracting partition $e"
         dd if="$i" of="$File"
-        echo "- 已将 $e 分区提取至：$File"
+        echo "- Partition $e extracted to: $File"
     fi
 done
 }
@@ -53,16 +53,16 @@ done
 flash(){
 IFS=$'\n'
 e=${IMG##*/}
-echo "- 当前选择的分区: $e"
-echo "- 刷入文件路径：$Brush_in"
+echo "- Selected partition: $e"
+echo "- Path to file to flash: $Brush_in"
 if [[ ! -L "$IMG" ]];then
-    echo "！未找到 $e 分区，无法刷入"
+    echo "！Partition $e not found, cannot flash"
 else
     if [[ -f "$Brush_in" ]]; then
-        echo "- 正在刷入 $e 分区"
+        echo "- Flashing partition $e"
         dd if="$Brush_in" of="$IMG"
         if [[ $CQ = 1 ]]; then
-         echo "正在重启至 Recovery 模式，倒计时……"
+         echo "Rebooting to Recovery, countdown…"
          for i in $(seq 4 -1 1); do
             echo $i
             sleep 1
@@ -70,7 +70,7 @@ else
          reboot recovery
          fi
          if [[ $CQ1 = 1 ]]; then
-          echo "正在重启系统，倒计时……"
+          echo "Rebooting system, countdown…"
           for i in $(seq 4 -1 1); do
             echo $i
             sleep 1
@@ -78,9 +78,9 @@ else
           reboot
          fi
     else
-        echo "！未找到刷入文件 $Brush_in，无法写入到 $e 分区"
+        echo "！File to flash $Brush_in not found, cannot write to partition $e"
     fi
-    echo "- 完成"
+    echo "- Done"
     sleep 2
 fi
 }

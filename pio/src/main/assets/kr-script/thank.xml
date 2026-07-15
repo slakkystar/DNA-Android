@@ -1,17 +1,17 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <root>
-    <group title="特别感谢以下各位，排名不分先后，如有遗漏请告知。">
+    <group title="Special thanks to the following people, in no particular order. If I missed someone — let me know.">
         <page link="https://github.com/helloklf/kr-scripts">
-            <title>「kr-scripts」、Github：helloklf | Coolapk：嘟嘟斯基</title>
-            <desc>此应用程序基于“kr-scripts”框架，原软件名称为：“PIO”。</desc>
+            <title>"kr-scripts", Github: helloklf | Coolapk: 嘟嘟斯基</title>
+            <desc>This application is based on the "kr-scripts" framework, original program name: "PIO".</desc>
         </page>
         <page link="">
             <title>TIK Toolbox Group</title>
-            <desc>感谢各位组员的测试和帮助，我无法一一列举。</desc>
+            <desc>Thanks to all group members for testing and assistance, too many to list everyone.</desc>
         </page>
         <page link="https://gitee.com/yeliqin666/TIK">
             <title>TIK Toolbox</title>
-            <desc>部分代码取自 TIK2 源代码，谢谢。</desc>
+            <desc>Part of the code is taken from TIK2 source code, thank you.</desc>
         </page>
         <page link="https://github.com/topjohnwu/Magisk">
             <title>magiskboot</title>
@@ -24,19 +24,19 @@
         </page>
         <page link="https://gitee.com/sharpeter/DNA">
            <title>DNA</title>
-           <desc>I used the name of @温柔的悲好大佬's DNA toolbox to pay tribute to him！</desc>
+           <desc>I used the name DNA toolbox of the respected @温柔的悲好, paying tribute!</desc>
         </page>
         <page link="">
            <title>Computer Assistant</title>
-           <desc>助手的原作者是：@情非得矣c，我们使用了该工具中的一些代码！</desc>
+           <desc>Original author: @情非得矣c, we used part of the code from this tool!</desc>
         </page>
         <page link="https://github.com/affggh/fspatch">
            <title>affggh</title>
-           <desc>@affggh's fspatch.py 修补权限文件和 GitHub 开源工具</desc>
+           <desc>fspatch.py by @affggh — permission file patching and open-source tools on GitHub</desc>
         </page>
         <page link="https://github.com/slakkystar">
            <title>Slakky Stars</title>
-           <desc>我决定继续推进这个项目，添加更多功能、翻译等等 </desc>
+           <desc>He decided to continue the development of this project, adding new features, translations and more</desc>
         </page>
     </group>
 

@@ -1,20 +1,20 @@
 <?xml version="1.0" encoding="UTF-8" ?>
-<group title="分区管理">
+<group title="Partition Management">
     <action>
-        <title>提取 img 文件</title>
+        <title>Extract img file from system</title>
         <set>samples/image.sh extract</set>
-        <param name="IMG" title="请选择分区（支持多选）：" multiple="true" options-sh="samples/image.sh name" required="true"/>
+        <param name="IMG" title="Select partition (multiple selection supported):" multiple="true" options-sh="samples/image.sh name" required="true"/>
     </action>
     
     <action>
-        <title>刷入 img 文件</title>
+        <title>Flash img file</title>
         <set>samples/image.sh flash</set>
-        <param name="CQ" label="完成后自动重启设备" type="checkbox" />
-        <param name="CQ1" label="完成后自动重启到 Recovery" type="checkbox" />
-        <param name="IMG" title="注意：请勿刷入 system 等分区" options-sh="samples/image.sh name" required="true"/>
-        <param name="Brush_in" type="file" suffix="img" editable="true" required="true" title="您可以输入 img 文件的绝对路径，或使用文件选择器选择文件" desc="提示：您可以使用 [MT 管理器] 长按目录或文件 --> 点击属性 --> 点击目录以复制该目录的绝对路径，长按目录或长按名称以复制文件的绝对路径。" required="true"/>
+        <param name="CQ" label="Automatically reboot device after flashing is complete" type="checkbox" />
+        <param name="CQ1" label="Automatically reboot to Recovery after flashing is complete" type="checkbox" />
+        <param name="IMG" title="Warning: do not flash partitions such as system" options-sh="samples/image.sh name" required="true"/>
+        <param name="Brush_in" type="file" suffix="img" editable="true" required="true" title="You can enter the absolute path to the img file or use file selection" desc="Tip: you can use [MT Manager] — long press on a folder or file --> Properties --> tap on the directory to copy the absolute path of the folder, or long press on the name to copy the absolute path of the file." required="true"/>
     </action>
 </group>
-<group title="关于工具">
-    <page title="特别鸣谢" config="file:///android_asset/kr-script/thank.xml" />
+<group title="About">
+    <page title="Special Thanks" config="file:///android_asset/kr-script/thank.xml" />
 </group>

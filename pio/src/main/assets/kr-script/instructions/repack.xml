@@ -1,120 +1,120 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <page>
     <text>
-        <slice size="22" bold="true" break="true">固件打包</slice>
-        <slice break="true">打包时有许多选项可用——从文件系统类型到压缩方式以及最终文件的格式。让我们详细了解一下每一个选项。</slice>
+        <slice size="22" bold="true" break="true">Firmware Packing</slice>
+        <slice break="true">When packing, many options are available — from filesystem type to compression and final file format. Let's go through each one in detail.</slice>
     </text>
 
     <text>
-        <slice size="20" bold="true" break="true">构建类型：ext4 / erofs / f2fs</slice>
+        <slice size="20" bold="true" break="true">Pack Type: ext4 / erofs / f2fs</slice>
         <slice bold="true" break="true">ext4</slice>
-        <slice break="true">经典的具有写支持（读写）的日志文件系统。用于必须保持可变的分区（如 userdata，在旧的非 Treble 设备上偶尔也用于 system）。该系统研究透彻、兼容性最高，但在相同内容下比 erofs 占用更多空间。</slice>
+        <slice break="true">A classic journaling filesystem with write support (read-write). Used on partitions that must remain modifiable (userdata, sometimes system on older non-Treble devices). Well-studied, maximally compatible, but takes up more space than erofs with the same content.</slice>
         <slice bold="true" break="true">erofs</slice>
-        <slice break="true">Enhanced Read-Only File System（增强型只读文件系统）—— 一种专为只读设计的压缩文件系统。几乎所有现代固件都将其用于 system/vendor/product 等在运行时不需要修改的分区。得益于压缩机制，最终镜像体积明显变小，且读取速度比未压缩的 ext4 更快。</slice>
+        <slice break="true">Enhanced Read-Only File System — a compressed read-only filesystem. Used on almost all modern firmware for system/vendor/product and similar partitions that must not be modified at runtime. Due to compression, the final image is noticeably smaller, and reading is faster than from uncompressed ext4.</slice>
         <slice bold="true" break="true">f2fs</slice>
-        <slice break="true">Flash-Friendly File System（闪存友好文件系统）—— 专为 NAND 闪存特性设计的文件系统（日志结构写入）。通常用于对写入速度和闪存耐用性要求较高的 userdata/metadata 分区。</slice>
+        <slice break="true">Flash-Friendly File System — a filesystem designed specifically for the characteristics of NAND flash memory (log-structured writes). Typically used for userdata/metadata where write speed and memory wear resistance are important.</slice>
     </text>
 
     <text>
-        <slice size="20" bold="true" break="true">访问权限：ro</slice>
-        <slice break="true">RO —— Read Only，“只读”。开启后，在设备运行固件时将无法修改该分区（系统会将其挂载为不可变状态）。</slice>
-        <slice break="true" color="#ff9500">此选项仅在构建类型为 ext4 时有效——erofs 本质上始终是只读的，而 f2fs 是读写的，因此该标志不适用于它们。</slice>
+        <slice size="20" bold="true" break="true">Permissions: ro</slice>
+        <slice break="true">RO — Read Only. When enabled, the partition cannot be modified directly while the firmware is running on the device (the system will mount it as immutable).</slice>
+        <slice break="true" color="#ff9500">This option only works with ext4 pack type — erofs is always read-only by nature, and f2fs is read-write, so this flag does not apply to them.</slice>
     </text>
 
     <text>
-        <slice size="20" bold="true" break="true">大小</slice>
-        <slice bold="true" break="true">自动</slice>
-        <slice break="true">最终文件的大小将根据解包数据的实际体积来决定——即容纳内容的最小必要大小。</slice>
-        <slice bold="true" break="true">原始大小</slice>
-        <slice break="true">最终文件大小将与源（原始）镜像相同。如果数据量超过了原始大小，打包将会失败并报错。</slice>
-        <slice break="true" color="#ff9500">对于内核（kernel），始终使用“原始大小”模式——此选项对其是固定且不可选的。</slice>
+        <slice size="20" bold="true" break="true">Size</slice>
+        <slice bold="true" break="true">Auto</slice>
+        <slice break="true">The final file size is determined based on the actual volume of unpacked data — the minimum required size to fit the content.</slice>
+        <slice bold="true" break="true">Original</slice>
+        <slice break="true">The final file size will be the same as the original (source) image. If the data turns out to be larger than what fits in the original size, packing will fail with an error.</slice>
+        <slice break="true" color="#ff9500">For kernel, the "Original" mode is always used — this option is fixed for it and unavailable for selection.</slice>
     </text>
 
     <text>
-        <slice size="20" bold="true" break="true">img 格式：raw / sparse</slice>
+        <slice size="20" bold="true" break="true">img Format: raw / sparse</slice>
         <slice bold="true" break="true">raw</slice>
-        <slice break="true">完整的逐扇区分区镜像——一种任何工具（如 dd、镜像分析器等）都能识别的通用格式，但在打包阶段会占用手机磁盘更多的空间。</slice>
+        <slice break="true">A full sector-by-sector partition image — a universal format understood by any tool (dd, image analyzers, etc.), but takes up more disk space on the phone during the packing stage.</slice>
         <slice bold="true" break="true">sparse</slice>
-        <slice break="true">Android sparse（稀疏）格式——仅存储实际占用的区块，不写入空白区域。体积更小，也是通过 “fastboot flash” 进行刷机时 fastboot 所期望的格式。在没有转换（img2simg/simg2img）的情况下第三方工具无法直接读取。</slice>
-        <slice break="true" bold="true">如何选择：</slice>
-        <slice break="true">如果你打算通过 fastboot 刷机——请选择 sparse。如果需要用于分析/解包/dd 的镜像——请选择 raw。</slice>
-        <slice break="true" color="#ff9500">此选项仅在构建类型为 ext4/erofs 时可用——f2fs 不支持此设置。</slice>
+        <slice break="true">Android sparse format — stores only actually occupied blocks, empty areas are not written. Smaller in size and what fastboot expects when flashing via "fastboot flash". Cannot be read directly by third-party tools without conversion (img2simg/simg2img).</slice>
+        <slice break="true" bold="true">What to choose:</slice>
+        <slice break="true">If you plan to flash via fastboot — choose sparse. If you need an image for analysis/unpacking/dd — raw.</slice>
+        <slice break="true" color="#ff9500">This option is only available with ext4/erofs pack type — f2fs does not support this setting.</slice>
     </text>
 
     <text>
-        <slice size="20" bold="true" break="true">文件格式：img / .dat / .dat.br</slice>
+        <slice size="20" bold="true" break="true">File Format: img / .dat / .dat.br</slice>
         <slice bold="true" break="true">img</slice>
-        <slice break="true">普通分区镜像（raw 或 sparse）—— 用于直接通过 fastboot 或 dd 刷入。</slice>
+        <slice break="true">A regular partition image (raw or sparse) — for flashing via fastboot or dd directly.</slice>
         <slice bold="true" break="true">.dat</slice>
-        <slice break="true">一种基于区块的数据传输格式（transfer list），由 update_engine/recovery 在通过 updater-script 安装时使用——适用于没有动态分区的非 A/B 系统。</slice>
+        <slice break="true">A block-based data transfer format (transfer list) used by update_engine/recovery when installing via updater-script — used on non-A/B systems without dynamic partitions.</slice>
         <slice bold="true" break="true">.dat.br</slice>
-        <slice break="true">与 .dat 相同， but 额外经过了 brotli 压缩——可以减小文件体积，常用于非 A/B 固件的 OTA/更新包中。</slice>
+        <slice break="true">Same as .dat, but additionally compressed with brotli — reduces file size, often used in OTA/updater packages for non-A/B firmware.</slice>
     </text>
 
     <text>
-        <slice size="20" bold="true" break="true">br (brotli) 压缩等级</slice>
-        <slice break="true">提供 7 个 brotli 压缩等级——从 1（最小压缩，打包最快）到 7（最大压缩，但打包时间明显变长）。</slice>
-        <slice break="true">等级越高，最终的 .dat.br 文件越小，但打包耗时越长。对于日常重新打包，中等数值就足够了；当非常在乎最小文件体积时（例如发布共享），才建议使用最高等级。</slice>
+        <slice size="20" bold="true" break="true">br (brotli) Compression Level</slice>
+        <slice break="true">7 brotli compression levels are available — from 1 (minimal compression, fastest packing) to 7 (maximum compression, but noticeably longer packing time).</slice>
+        <slice break="true">The higher the level, the smaller the final .dat.br file, but the longer the packing itself takes. For everyday repacking, medium values are sufficient; the maximum level should be used when minimal file size is critical (e.g., for distribution).</slice>
     </text>
 
     <text>
-        <slice size="20" bold="true" break="true">固件压缩等级 (erofs/f2fs)</slice>
-        <slice break="true">共有 9 个等级——从 1（最小压缩，在设备上打包和解包最快）到 9（最大压缩，分区体积最小，但读取时设备的 CPU 负载更高，且打包本身耗时更长）。</slice>
-        <slice break="true">当设备空间非常紧张时，更高的等级会很有用。为了兼顾速度与体积，通常选择中等等级即可。</slice>
+        <slice size="20" bold="true" break="true">Firmware Compression Level (erofs/f2fs)</slice>
+        <slice break="true">9 levels — from 1 (minimal compression, fastest packing and unpacking on the device) to 9 (maximum compression, minimal partition size, but higher CPU load on the device when reading and longer packing itself).</slice>
+        <slice break="true">A higher level is useful when device storage space is critical. For a balance of speed/size, a medium level is usually sufficient.</slice>
     </text>
 
     <text>
-        <slice size="20" bold="true" break="true">压缩类型 (erofs)</slice>
+        <slice size="20" bold="true" break="true">Compression Type (erofs)</slice>
         <slice bold="true" break="true">lz4</slice>
-        <slice break="true">设备上解压速度最快，但压缩率也最低——读取时的 CPU 负载最小。</slice>
+        <slice break="true">The fastest decompression on the device, but also the lowest compression ratio — minimal CPU load when reading.</slice>
         <slice bold="true" break="true">lz4hc</slice>
-        <slice break="true">lz4 的“高压缩（High Compression）”版本——压缩效果明显优于普通 lz4（打包过程较慢），但在设备上的解压速度几乎与 lz4 一样快。</slice>
+        <slice break="true">"High Compression" version of lz4 — compresses noticeably better than regular lz4 (packing itself takes longer), but decompression speed on the device remains almost as fast as lz4.</slice>
         <slice bold="true" break="true">lzma</slice>
-        <slice break="true">三种类型中压缩率最高，但解压最慢——每次从分区读取文件时设备的 CPU 负载较高。只有在体积远比性能重要时才建议使用。</slice>
+        <slice break="true">The maximum compression ratio of all three, but the slowest decompression — higher CPU load on the device every time files are read from the partition. Should only be used if size is more important than performance.</slice>
     </text>
 
     <text>
-        <slice size="20" bold="true" break="true">压缩 ext4 空间</slice>
-        <slice break="true">将 ext4 文件系统缩减至所需的最小尺寸，移除空白的预留空间——使最终文件更紧凑，镜像内部没有多余的“空虚”空间。</slice>
-        <slice break="true" color="#ff9500">仅适用于 ext4——erofs 的最终大小本身就是根据实际打包的数据计算的，而 f2fs 不支持此操作。</slice>
+        <slice size="20" bold="true" break="true">Compress ext4 Space</slice>
+        <slice break="true">Shrinks the ext4 filesystem to the minimum required size, removing empty reserved space — the final file becomes more compact, without unnecessary "air" inside the image.</slice>
+        <slice break="true" color="#ff9500">Only works for ext4 — for erofs, the final size is already calculated based on the actual packed data, and f2fs does not support this operation.</slice>
     </text>
 
     <text>
-        <slice size="20" bold="true" break="true">移除数据加密 (AVB)</slice>
-        <slice break="true">从 fstab 中移除 AVB (Android Verified Boot) 标志，并将相应的条目转换为解密（decrypt）模式。</slice>
-        <slice break="true">实际效果：userdata 分区不再强制要求加密（forceencrypt/fileencryption），系统在挂载时也不再通过 AVB 签名验证分区的完整性。当你手动修改分区时，此操作是必需的——如果不关闭 AVB，由于修改后的校验和与预期不符，设备可能会陷入无限重启（bootloop）。</slice>
+        <slice size="20" bold="true" break="true">Remove AVB Data Encryption</slice>
+        <slice break="true">Removes AVB (Android Verified Boot) flags from fstab and switches the corresponding entries to decrypt mode.</slice>
+        <slice break="true">In practice, this means: the userdata partition no longer requires forced encryption (forceencrypt/fileencryption), and the system no longer checks partition integrity via AVB signatures when mounting. This is necessary when you manually modify partitions — without disabling AVB, the device may enter a bootloop, since checksums after modification no longer match the expected ones.</slice>
     </text>
 
     <text>
-        <slice size="20" bold="true" break="true">打包 super.img</slice>
-        <slice break="true">独立打包动态分区 super，它融合了各个逻辑分区（system、vendor、product 等）。</slice>
+        <slice size="20" bold="true" break="true">Packing super.img</slice>
+        <slice break="true">A separate packing of the dynamic super partition, which combines logical partitions (system, vendor, product, etc.)</slice>
     </text>
 
     <text>
-        <slice size="20" bold="true" break="true">super 类型</slice>
+        <slice size="20" bold="true" break="true">Super Type</slice>
         <slice bold="true" break="true">a_only</slice>
-        <slice break="true">适用于单槽位设备（无 A/B 更新）——仅有一组处于活动状态的逻辑分区。</slice>
+        <slice break="true">For single-slot devices (without A/B updates) — only one active set of logical partitions.</slice>
         <slice bold="true" break="true">ab</slice>
-        <slice break="true">适用于 A/B 设备（无缝更新）——单个 super 内部同时存储带有 _a/_b 后缀的两套完整分区，从而可以在不影响当前工作槽位的情况下更新非活动槽位。</slice>
+        <slice break="true">For A/B devices (seamless update) — a single super stores two complete sets of partitions with _a/_b suffixes, allowing the inactive slot to be updated without touching the active one.</slice>
         <slice bold="true" break="true">virtual_ab</slice>
-        <slice break="true">较新的架构（从 Android 11 开始）——不再完整复制分区，而是基于写时复制（copy-on-write）原则使用快照（snapshots），从而在 OTA 更新时节省设备空间。这需要设备的 fastbootd/引导加载程序（bootloader）支持 virtual A/B。</slice>
+        <slice break="true">A newer scheme (starting from Android 11) — instead of full partition duplication, copy-on-write snapshots are used, saving device storage space during OTA updates. Requires virtual A/B support from the device's fastbootd/bootloader.</slice>
     </text>
 
     <text>
-        <slice size="20" bold="true" break="true">打包格式：raw / sparse</slice>
-        <slice break="true">原理与普通 img 相同：raw 为完整的逐扇区镜像，sparse 则是通过 “fastboot flash super” 刷机时 fastboot 所期望的紧凑格式。通过 fastboot 刷入时，几乎总是需要 sparse 格式。</slice>
+        <slice size="20" bold="true" break="true">Pack Format: raw / sparse</slice>
+        <slice break="true">The same principle as with regular img: raw — a full sector-by-sector image, sparse — a compact format that fastboot expects when "fastboot flash super". For flashing via fastboot, sparse is almost always needed.</slice>
     </text>
 
     <text>
-        <slice size="20" bold="true" break="true">总大小</slice>
-        <slice break="true">整个 super.img 的最终大小（以 GB 为单位）——必须与目标设备上 super 分区的实际大小相匹配（可以通过查看原始固件或对源 super.img 使用 lpdump 来获取）。</slice>
+        <slice size="20" bold="true" break="true">Total Size</slice>
+        <slice break="true">The final size of the entire super.img in gigabytes — must match the actual size of the super partition on the target device (can be checked in the original firmware or via lpdump on the source super.img).</slice>
     </text>
 
     <text>
-        <slice size="20" bold="true" break="true">组名称</slice>
-        <slice break="true" color="#ff9500">默认值：qti_dynamic_partitions</slice>
-        <slice break="true">这是 lpmake 在打包 super 时使用的分区组（partition group）名称——它必须与设备原始固件中的名称一致，否则 fastbootd/引导加载程序在刷机时可能无法识别该分区。</slice>
-        <slice break="true">前缀 “qti”（高通技术公司）意味着这是高通芯片组设备的标准名称——大多数骁龙（Snapdragon）设备制造商在历史上都这样命名该组。在搭载其他芯片组（联发科 MediaTek、谷歌 Google Tensor 等）的设备上，组名称可能会有所不同。</slice>
-        <slice break="true">特定设备的准确组名称最好在原始 super.img 的元数据中查看（例如通过 lpdump）——如果使用的是非标准芯片组/厂商，那里很可能是一个不同的名称，你必须将其指定为与原始完全一致的名称。</slice>
+        <slice size="20" bold="true" break="true">Group Name</slice>
+        <slice break="true" color="#ff9500">Default: qti_dynamic_partitions</slice>
+        <slice break="true">This is the partition group name used by lpmake when building super — it must match what was in the device's original firmware, otherwise fastbootd/bootloader may not recognize the partition when flashing.</slice>
+        <slice break="true">The prefix "qti" (Qualcomm Technologies Inc) means this is the standard name for devices on Qualcomm chipsets — this is historically how most Snapdragon device manufacturers name the group. On devices with other chipsets (MediaTek, Google Tensor, etc.), the group name may differ.</slice>
+        <slice break="true">The exact group name for a specific device is best checked in the metadata of the original super.img (e.g., via lpdump) — if you have a non-standard chipset/vendor, there will most likely be a different name, and it must be specified exactly as it was in the original.</slice>
     </text>
 </page>

@@ -1,48 +1,48 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <page>
     <text>
-        <slice size="22" bold="true" break="true">固件解包</slice>
-        <slice break="true">支持多种文件格式：payload.bin、.img、.dat/.br 和 super.img。</slice>
-        <slice break="true" color="#ff9500">在解包任何格式之前，请将文件放入 /storage/emulated/0/DNA/DNA_{项目名称}/</slice>
-        <slice break="true">之后，在菜单中选择与你的文件格式相对应的解包选项。</slice>
+        <slice size="22" bold="true" break="true">Firmware Unpacking</slice>
+        <slice break="true">Several file formats are supported: payload.bin, .img, .dat/.br and super.img.</slice>
+        <slice break="true" color="#ff9500">Before unpacking any format, place the file in /storage/emulated/0/DNA/DNA_{project_name}/</slice>
+        <slice break="true">After that, select the unpack menu item corresponding to your file format.</slice>
     </text>
 
     <text>
-        <slice size="20" bold="true" break="true">解包 payload.bin</slice>
-        <slice break="true">解包 payload 时有两个选项可用：</slice>
-        <slice bold="true" break="true">• 自动解包提取的 IMG</slice>
-        <slice break="true">从 payload.bin 中提取的所有 .img 文件将立即被进一步解包（无需另外手动启动解包）。</slice>
-        <slice bold="true" break="true">• 完成后删除源文件</slice>
-        <slice break="true">在所有解包操作完成后，原 payload.bin 文件将被自动删除。</slice>
+        <slice size="20" bold="true" break="true">Unpacking payload.bin</slice>
+        <slice break="true">When unpacking payload, two options are available:</slice>
+        <slice bold="true" break="true">• Automatically unpack extracted IMGs</slice>
+        <slice break="true">All .img files extracted from payload.bin will be immediately unpacked further (without a separate repeated unpack run).</slice>
+        <slice bold="true" break="true">• Delete source file after completion</slice>
+        <slice break="true">The original payload.bin will be automatically deleted after all unpacking operations are completed.</slice>
     </text>
 
     <text>
-        <slice size="20" bold="true" break="true">解包 .dat / .dat.br</slice>
-        <slice break="true">这种格式常用于非动态分区（non-dynamic）系统（无 super 分区）。</slice>
-        <slice break="true">仅有一个选项可用——“完成后删除源文件”：解包后，原 .dat 和 .dat.br 文件将被删除。</slice>
+        <slice size="20" bold="true" break="true">Unpacking .dat / .dat.br</slice>
+        <slice break="true">This format is often used in non-dynamic systems (without a super partition).</slice>
+        <slice break="true">Only one option is available — "Delete source file after completion": after unpacking, the original .dat and .dat.br files will be deleted.</slice>
     </text>
 
     <text>
-        <slice size="20" bold="true" break="true">解包 .img</slice>
-        <slice break="true">工作原理与 .dat/.br 几乎相同——提供一个“完成后删除源文件”选项（解包后删除原 .img 文件）。</slice>
-        <slice break="true" bold="true">支持的分区：</slice>
-        <slice break="true">boot、system/vendor（以及它们的所有子分区——sys_ext、product、odm 等）、userdata/metadata</slice>
-        <slice break="true" bold="true">支持的文件系统格式：</slice>
-        <slice break="true">ext4、erofs、f2fs、kernel</slice>
+        <slice size="20" bold="true" break="true">Unpacking .img</slice>
+        <slice break="true">Works almost the same as .dat/.br — one option "Delete source file after completion" is available (deletes the original .img after unpacking).</slice>
+        <slice break="true" bold="true">Supported partitions:</slice>
+        <slice break="true">boot, system/vendor (and all their sub-versions — sys_ext, product, odm, etc.), userdata/metadata</slice>
+        <slice break="true" bold="true">Supported filesystem formats:</slice>
+        <slice break="true">ext4, erofs, f2fs, kernel</slice>
     </text>
 
     <text>
-        <slice size="20" bold="true" break="true">解包 super.img</slice>
-        <slice break="true">与 payload 类似，有两个选项可用：</slice>
-        <slice bold="true" break="true">• 自动解包提取的 IMG</slice>
-        <slice break="true">从 super.img 中提取的所有分区将立即被进一步解包。</slice>
-        <slice bold="true" break="true">• 完成后删除源文件</slice>
-        <slice break="true">在所有操作完成后，原 super.img 文件将被删除。</slice>
+        <slice size="20" bold="true" break="true">Unpacking super.img</slice>
+        <slice break="true">As with payload, two options are available:</slice>
+        <slice bold="true" break="true">• Automatically unpack extracted IMGs</slice>
+        <slice break="true">All partitions extracted from super.img will be immediately unpacked further.</slice>
+        <slice bold="true" break="true">• Delete source file after completion</slice>
+        <slice break="true">The original super.img will be deleted after all operations are completed.</slice>
     </text>
 
     <text>
-        <slice size="20" bold="true" break="true">重要特性</slice>
-        <slice break="true" color="#ff3b30">所有 .img 文件均无法在 sparse 格式下直接解包——仅支持 raw 格式。</slice>
-        <slice break="true">如果你尝试解包 sparse 镜像，应用会自动将其转换为 raw 格式并继续解包——无需手动另行转换。</slice>
+        <slice size="20" bold="true" break="true">Important Note</slice>
+        <slice break="true" color="#ff3b30">All .img files cannot be unpacked in sparse format — only raw is supported.</slice>
+        <slice break="true">If you try to unpack a sparse image, the app will automatically convert it to raw and continue unpacking — there is no need to do this manually.</slice>
     </text>
 </page>

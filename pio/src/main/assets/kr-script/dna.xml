@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <resource dir="file:///android_asset/samples" />
-<group title="插件功能">
-    <page config-sh="samples/modun.sh" title="插件功能" desc="可使用 file.zip2 导入本地插件">
+<group title="Plugin Features">
+    <page config-sh="samples/modun.sh" title="Plugin Features" desc="You can use file.zip2 to import local plugins">
         <option type="file" style="fab" suffix="zip2" auto-off="true" reload="true"/>
     <handler>
         
@@ -10,151 +10,151 @@
     </page>
 </group>
 
-<group title="解包菜单">
+<group title="Unpack Menu">
     <action interruptible="false">
-        <title>解包 payload.bin</title>
+        <title>Unpack payload.bin</title>
         <set>dna dumper --partition "$img" --delete $silence --auto $auto $DNA_PRO/payload.bin</set>
-        <param name="silence" label="完成后删除源文件" type="checkbox" />
-        <param name="auto" label="自动解包提取的 IMG" type="checkbox" />
-        <param name="img" title="请选择要提取的分区，不选则默认全选：" separator="," options-sh="dna dumper --list $DNA_PRO/payload.bin" multiple="true"/>
+        <param name="silence" label="Delete source file after completion" type="checkbox" />
+        <param name="auto" label="Automatically unpack extracted IMGs" type="checkbox" />
+        <param name="img" title="Select partitions to extract, if none selected — all by default:" separator="," options-sh="dna dumper --list $DNA_PRO/payload.bin" multiple="true"/>
         <lock>
             if [[ -f $DNA_PRO/payload.bin ]]; then
                 echo 'unlocked'
             else
-                echo '未找到 payload.bin'
+                echo 'payload.bin not found'
             fi
         </lock>
     </action>
     
     <action interruptible="false">
-        <title>解包 br</title>
+        <title>Unpack br</title>
         <set>dna extract $BR --delete $silence</set>
-        <param name="silence" label="完成后删除源文件" type="checkbox" />
-        <param name="BR" title="请选择 br 文件：" separator="," options-sh="samples/findfile.sh br" desc="请将您的文件放入 /sdcard/DNA 项目路径中" required="true" multiple="true"/>                
+        <param name="silence" label="Delete source file after completion" type="checkbox" />
+        <param name="BR" title="Select br file:" separator="," options-sh="samples/findfile.sh br" desc="Place your file in the project path /sdcard/DNA" required="true" multiple="true"/>                
     </action>
 
     <action interruptible="false">
-        <title>解包 dat</title>
+        <title>Unpack dat</title>
         <set>dna extract $DAT --delete $silence</set>
-        <param name="silence" label="完成后删除源文件" type="checkbox" />
-        <param name="DAT" title="请选择 dat 文件：" separator="," options-sh="samples/findfile.sh dat" desc="请将您的文件放入 /sdcard/DNA 项目路径中" required="true" multiple="true"/>              
+        <param name="silence" label="Delete source file after completion" type="checkbox" />
+        <param name="DAT" title="Select dat file:" separator="," options-sh="samples/findfile.sh dat" desc="Place your file in the project path /sdcard/DNA" required="true" multiple="true"/>              
     </action>
 
     <action interruptible="false">
-        <title>解包 img</title>
+        <title>Unpack img</title>
         <set>dna extract $IMG --delete $silence</set>
-        <param name="silence" title="完成后删除源文件" label="完成后删除源文件" type="checkbox" />
-        <param name="IMG" title="请选择 img 文件：" separator="," options-sh="samples/findfile.sh img" desc="请将您的文件放入 /sdcard/DNA 项目路径中。工具会自动识别 img 格式并进行解包（解包 super 时，仅提取 a 分区文件。）" required="true" multiple="true"/>
+        <param name="silence" label="Delete source file after completion" type="checkbox" />
+        <param name="IMG" title="Select img file:" separator="," options-sh="samples/findfile.sh img" desc="Place your file in the project path /sdcard/DNA. The tool will automatically detect the img format and unpack it (when unpacking super, only partition a files are extracted)." required="true" multiple="true"/>
     </action>
     <action interruptible="false">
-        <title>解包 super</title>
+        <title>Unpack super</title>
         <set>dna lpunpack --partition "$img" --delete $silence --auto $auto $DNA_PRO/super.img</set>
-        <param name="silence" label="完成后删除源文件" type="checkbox" />
-        <param name="auto" label="自动解包提取的 IMG" type="checkbox" />
-        <param name="img" title="请选择要提取的分区，不选则默认全选：" separator="," options-sh="dna lpunpack --list $DNA_PRO/super.img" multiple="true"/>
+        <param name="silence" label="Delete source file after completion" type="checkbox" />
+        <param name="auto" label="Automatically unpack extracted IMGs" type="checkbox" />
+        <param name="img" title="Select partitions to extract, if none selected — all by default:" separator="," options-sh="dna lpunpack --list $DNA_PRO/super.img" multiple="true"/>
         <lock>
             if [[ -f $DNA_PRO/super.img ]]; then
                 echo 'unlocked'
             else
-                echo '未找到 super.img'
+                echo 'super.img not found'
             fi
         </lock>
     </action>    
 </group>
 
-<group title="打包菜单">
+<group title="Pack Menu">
     <action interruptible="false">
-        <title>打包单个分区</title>
+        <title>Pack a single partition</title>
         <set>dna repack $IMG_DIR --read $Read --auto $Pack --format $img_type --type $repack_from --br $brze --erofs $erofsze --mode $type --compress $test --delavb $test1 --convert $tool</set>
-        <param name="IMG_DIR" options-sh="samples/findfile.sh dir" desc="将自动检测 IMG 打包格式" separator="," required="true" multiple="true"/>
-        <param name="tool" label="打包类型">
+        <param name="IMG_DIR" options-sh="samples/findfile.sh dir" desc="IMG packing format will be automatically detected" separator="," required="true" multiple="true"/>
+        <param name="tool" label="Pack type">
              <option value="0"> ext4 </option>
              <option value="1"> erofs </option>
              <option value="2"> f2fs </option>
         </param>        
-        <param name="Read" label="读写权限" desc="注意：仅在打包为 ext4 时使用"  >
-             <option value="1">读写---rw</option>
-             <option value="0">只读---ro</option>
+        <param name="Read" label="Read/Write permissions" desc="Note: only used when packing to ext4">
+             <option value="1">Read/Write---rw</option>
+             <option value="0">Read Only---ro</option>
         </param>
-        <param name="Pack" label="大小" desc="注意：仅在打包为 ext4 时使用" >
-             <option value="1" >自动</option>
-             <option value="0" >原始大小</option>
+        <param name="Pack" label="Size" desc="Note: only used when packing to ext4">
+             <option value="1">Auto</option>
+             <option value="0">Original size</option>
         </param>
-        <param name="img_type" label="img 格式" desc="注意：仅在打包为 ext4 或 erofs 时使用" >
-             <option value="0" >Raw</option>
-             <option value="1" >Sparse</option>
+        <param name="img_type" label="img format" desc="Note: only used when packing to ext4 or erofs">
+             <option value="0">Raw</option>
+             <option value="1">Sparse</option>
         </param>
-        <param name="repack_from" label="文件格式" desc="注意：仅在打包为 ext4 或 erofs 时使用" >
-             <option value="0" >IMG</option>
-             <option value="1" >DAT</option>
-             <option value="2" >BR</option>
+        <param name="repack_from" label="File format" desc="Note: only used when packing to ext4 or erofs">
+             <option value="0">IMG</option>
+             <option value="1">DAT</option>
+             <option value="2">BR</option>
         </param>
-        <param name="brze" label="br 压缩级别" value="3" desc="注意：数值越大，打包过程可能越慢" type="seekbar" max="7" min="1"/>
-        <param name="erofsze" label="Erofs(f2fs) 压缩级别" value="8" desc="注意：仅在打包为 Erofs(f2fs) 时使用"  type="seekbar" max="9" min="0"/>
-        <param name="type" label="类型" desc="注意：仅在打包为 Erofs 时使用" >
-             <option value="lz4hc" >lz4hc</option>
-             <option value="lz4" >lz4</option>
-             <option value="lzma" >lzma</option>
+        <param name="brze" label="br compression level" value="3" desc="Note: the higher the value, the slower the packing process may be" type="seekbar" max="7" min="1"/>
+        <param name="erofsze" label="Erofs(f2fs) compression level" value="8" desc="Note: only used when packing to Erofs(f2fs)" type="seekbar" max="9" min="0"/>
+        <param name="type" label="Type" desc="Note: only used when packing to Erofs">
+             <option value="lz4hc">lz4hc</option>
+             <option value="lz4">lz4</option>
+             <option value="lzma">lzma</option>
         </param>
-        <param name="test" label="压缩 ext4 img 空间" desc="注意：仅在打包为 ext4 时使用" type="switch" />
-        <param name="test1" label="移除 avb 数据加密" desc="注意：此开关会修改 fstab 文件，该操作并非通用，可能会导致无限重启。" type="switch" />
+        <param name="test" label="Compress ext4 img space" desc="Note: only used when packing to ext4" type="switch" />
+        <param name="test1" label="Remove avb data encryption" desc="Note: this switch will modify the fstab file, the operation is not universal and may cause a bootloop." type="switch" />
     </action>
     <action interruptible="false">
-        <title>打包 super.img</title>
+        <title>Pack super.img</title>
         <set>dna lpmake --type $type --format $from --super_size $size --super_group $super_group $IMG_NAME</set>
-        <param name="type" label="类型" >
+        <param name="type" label="Type">
              <option value="A"> a_only</option>
              <option value="AB"> ab</option>
              <option value="VAB"> virtual_ab</option>
         </param>
-        <param name="from" label="格式" >
+        <param name="from" label="Format">
              <option value="1"> sparse </option>
              <option value="0"> raw </option>
         </param>
-        <param name="size" required="true" value="8.5" label="super.img 总大小" desc="输入您的 super img 大小，默认值为 8.5G。"  type="float"/>
-        <param name="super_group" required="true" value="qti_dynamic_partitions" label="分区组名称" desc="如果您不知道，请保持默认。" />
-        <param name="IMG_NAME" title="请选择要打包的 IMG 文件：" options-sh="samples/findfile.sh img" desc="请将您的文件放入 /sdcard/DNA 项目路径中" separator="," required="true" multiple="true"/>
+        <param name="size" required="true" value="8.5" label="Total super.img size" desc="Enter the size of your super img, default value 8.5G." type="float"/>
+        <param name="super_group" required="true" value="qti_dynamic_partitions" label="Partition group name" desc="If you don't know, leave it as default." />
+        <param name="IMG_NAME" title="Select IMG files to pack:" options-sh="samples/findfile.sh img" desc="Place your files in the project path /sdcard/DNA" separator="," required="true" multiple="true"/>
     </action>
 </group>
 
-<group title="格式转换">
+<group title="Format Conversion">
     <action interruptible="false">
-        <title>img 转 simg</title>
+        <title>img to simg</title>
         <set>samples/img_ov_simg.sh</set>
-        <param name="IMG" title="请选择 IMG 文件：" separator="," options-sh="samples/findfile.sh img" desc="请将您的文件放入 /sdcard/DNA 项目路径中" required="true" multiple="true"/>
+        <param name="IMG" title="Select IMG file:" separator="," options-sh="samples/findfile.sh img" desc="Place your file in the project path /sdcard/DNA" required="true" multiple="true"/>
     </action>
 
     <action interruptible="false">
-        <title>img 转 dat, br</title>
+        <title>img to dat, br</title>
         <set>dna convert $IMG --delete $silence --type $from --br $brze</set>
-        <param name="silence" title="删除源文件" label="完成后删除源文件" type="checkbox" />
-        <param name="from" label="类型" >
-             <option value="0" >DAT</option>
-             <option value="1" >BR</option>
+        <param name="silence" label="Delete source file after completion" type="checkbox" />
+        <param name="from" label="Type">
+             <option value="0">DAT</option>
+             <option value="1">BR</option>
         </param>
-        <param name="brze" required="true" value="3" label="BR 压缩级别" desc="注意：数值越大，打包过程可能越慢" type="seekbar" max="7" min="1"/>
-        <param name="IMG" title="请选择 IMG 文件：" separator="," options-sh="samples/findfile.sh img" desc="请将您的文件放入 /sdcard/DNA 项目路径中" required="true" multiple="true"/>              
+        <param name="brze" required="true" value="3" label="BR compression level" desc="Note: the higher the value, the slower the packing process may be" type="seekbar" max="7" min="1"/>
+        <param name="IMG" title="Select IMG file:" separator="," options-sh="samples/findfile.sh img" desc="Place your file in the project path /sdcard/DNA" required="true" multiple="true"/>              
     </action>
 
     <action interruptible="false">
-        <title>zst-img 转换</title>
+        <title>Convert zst-img</title>
         <set>$START_DIR/samples/zstd_img.sh</set>
-        <param name="silence" label="删除源文件" type="checkbox" />
-        <param name="ZST" title="请选择文件：" 
+        <param name="silence" label="Delete source file" type="checkbox" />
+        <param name="ZST" title="Select file:" 
            options-sh="samples/findfile.sh zst_img" 
-           desc="请将您的文件放入 /sdcard/DNA 项目路径中" 
+           desc="Place your file in the project path /sdcard/DNA" 
            required="true" multiple="true"/>
-        <param name="level" required="true" value="3" label="zstd 压缩级别" desc="注意：数值越大，压缩越慢！" type="seekbar" max="19" min="0"/>
+        <param name="level" required="true" value="3" label="zstd compression level" desc="Note: the higher the value, the slower the compression!" type="seekbar" max="19" min="0"/>
     </action>
 
     <action>
-        <title>合并 Sparse 分段</title>
+        <title>Merge split super</title>
         <set>$START_DIR/samples/merge_superchunk.sh</set>
-        <desc>将分段的 IMG 合并为完整 IMG</desc>
-        <param name="silence" label="删除源文件" type="checkbox" />
-        <param name="IMG" title="请选择分段的 IMG 文件" 
+        <desc>Merge segmented IMGs into a complete IMG</desc>
+        <param name="silence" label="Delete source files" type="checkbox" />
+        <param name="IMG" title="Select segmented IMG files" 
             options-sh="samples/findfile.sh split_sparse" 
-            desc="识别 /sdcard/DNA 项目路径中的文件" 
+            desc="File detection in the project path /sdcard/DNA" 
             required="true" multiple="true"/>
     </action>
 </group>
