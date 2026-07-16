@@ -32,9 +32,8 @@
     </text>
 
     <text>
-        <slice size="20" bold="true" break="true">Шаг 5. Плагин объединения my-разделов</slice>
-        <slice break="true">Установи плагин, который объединяет my_** разделы с system:</slice>
-        <slice break="true" link="https://github.com/slakkystar/DNA-Android/blob/beta/plugins/合并my分区到system.zip2">Плагин: объединение my-разделов в system</slice>
+        <slice size="20" bold="true" break="true">Шаг 5. Объеденение my-разделов</slice>
+        <slice break="true">Запусти скрипт который объединяет my_** разделы с system:</slice>
     </text>
 
     <text>

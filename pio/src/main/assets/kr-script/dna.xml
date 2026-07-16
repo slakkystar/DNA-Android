@@ -215,4 +215,12 @@
             <option value="25">25</option>
         </param>
     </action>
+    <action>
+        <title>Объединить раздел my_ с разделом system</title>
+        <desc>Выполните после объединение разделов my_** спецефичные для ColorOS в system</desc>
+        <set>
+         chmod +x "$START_DIR/samples/my_partition_merge.sh"
+         "$START_DIR/samples/my_partition_merge.sh"
+        </set>
+    </action>
 </group>
