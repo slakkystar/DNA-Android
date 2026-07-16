@@ -36,6 +36,9 @@ find "$DNA_PRO" -maxdepth 1 -type f -exec basename {} \; |
 zst_img)
 ls $DNA_PRO | grep -v "/$" | grep -E "\.(zst|zstd|img)$"
 ;;
+u_zst_img)
+ls $DNA_PRO | grep -v "/$" | grep -E "\.(zst|zstd)$"
+;;
 *)
 ls $DNA_PRO | grep -v "/$" | grep \."$1"$
 ;;

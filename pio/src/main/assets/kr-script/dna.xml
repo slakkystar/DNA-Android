@@ -4,7 +4,6 @@
     <page config-sh="samples/modun.sh" title="Plugin Features" desc="You can use file.zip2 to import local plugins">
         <option type="file" style="fab" suffix="zip2" auto-off="true" reload="true"/>
     <handler>
-        
         dna unzip $file $START_DIR/module
     </handler>
     </page>
@@ -46,6 +45,17 @@
         <param name="silence" label="Delete source file after completion" type="checkbox" />
         <param name="IMG" title="Select img file:" separator="," options-sh="samples/findfile.sh img" desc="Place your file in the project path /sdcard/DNA. The tool will automatically detect the img format and unpack it (when unpacking super, only partition a files are extracted)." required="true" multiple="true"/>
     </action>
+
+    <action interruptible="false">
+        <title>Unpack zstd</title>
+        <set>$START_DIR/samples/u_zstd_img.sh</set>
+        <param name="silence" label="Delete source file after extraction" type="checkbox" />
+        <param name="ZST" title="Select .zst or .zstd files:"
+            options-sh="samples/findfile.sh u_zst_img"
+            desc="Scans files under /sdcard/DNA project path"
+            required="true" multiple="true" />
+    </action>
+
     <action interruptible="false">
         <title>Unpack super</title>
         <set>dna lpunpack --partition "$img" --delete $silence --auto $auto $DNA_PRO/super.img</set>
@@ -99,6 +109,18 @@
         <param name="test" label="Compress ext4 img space" desc="Note: only used when packing to ext4" type="switch" />
         <param name="test1" label="Remove avb data encryption" desc="Note: this switch will modify the fstab file, the operation is not universal and may cause a bootloop." type="switch" />
     </action>
+
+    <action interruptible="false">
+        <title>Pack zstd</title>
+        <set>$START_DIR/samples/zstd_img.sh</set>
+        <param name="silence" label="Delete source file after completion" type="checkbox" />
+        <param name="ZST" title="Please select files:" 
+           options-sh="samples/findfile.sh zst_img" 
+           desc="Place your file in the project path /sdcard/DNA" 
+           required="true" multiple="true"/>
+        <param name="level" required="true" value="3" label="ZSTD compression level" desc="Note: The higher the number, the slower the compression, choose wisely!" type="seekbar" max="19" min="0"/>
+    </action>
+
     <action interruptible="false">
         <title>Pack super.img</title>
         <set>dna lpmake --type $type --format $from --super_size $size --super_group $super_group $IMG_NAME</set>
@@ -134,17 +156,6 @@
         </param>
         <param name="brze" required="true" value="3" label="BR compression level" desc="Note: the higher the value, the slower the packing process may be" type="seekbar" max="7" min="1"/>
         <param name="IMG" title="Select IMG file:" separator="," options-sh="samples/findfile.sh img" desc="Place your file in the project path /sdcard/DNA" required="true" multiple="true"/>              
-    </action>
-
-    <action interruptible="false">
-        <title>Convert zst-img</title>
-        <set>$START_DIR/samples/zstd_img.sh</set>
-        <param name="silence" label="Delete source file" type="checkbox" />
-        <param name="ZST" title="Select file:" 
-           options-sh="samples/findfile.sh zst_img" 
-           desc="Place your file in the project path /sdcard/DNA" 
-           required="true" multiple="true"/>
-        <param name="level" required="true" value="3" label="zstd compression level" desc="Note: the higher the value, the slower the compression!" type="seekbar" max="19" min="0"/>
     </action>
 
     <action>
