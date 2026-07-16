@@ -223,4 +223,24 @@
          "$START_DIR/samples/my_partition_merge.sh"
         </set>
     </action>
+    
+    <action>
+        <title>Patch vbmeta</title>
+       <set>
+         chmod +x "$START_DIR/tools/patch_vbmeta"
+         "$START_DIR/tools/patch_vbmeta"
+       </set>
+        <param name="silence" label="Delete source file after completion" type="checkbox" />
+        <param name="PATCH_TYPE" title="Select vbmeta patch type"
+               desc="Select the type of patch to apply to vbmeta.img"
+               type="select">
+            <option value="verity"> Disable dm-verity </option>
+            <option value="verification"> Disable dm-verification </option>
+            <option value="both"> Disable Both </option>
+        </param>
+        <param name="IMG" title="Select vbmeta IMG files to patch."
+               options-sh="samples/findfile.sh vbmeta"
+               desc="Select vbmeta image files in the /sdcard/DNA folder and project folders"
+               required="true" multiple="true"/>
+    </action>
 </group>

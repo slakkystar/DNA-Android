@@ -33,6 +33,13 @@ find "$DNA_PRO" -maxdepth 1 -type f -exec basename {} \; |
         printf "%s|%s Total %d files\n" "$clean_prefix" "$clean_prefix" "$count"
     done
 ;;
+vbmeta)
+    for i in $(ls $DNA_PRO | grep -E "^vbmeta.*\.img$"); do
+    if [ -f "$DNA_PRO/$i" ]; then
+        echo "$i|$i (vbmeta)"
+    fi
+    done
+;;
 zst_img)
 ls $DNA_PRO | grep -v "/$" | grep -E "\.(zst|zstd|img)$"
 ;;
