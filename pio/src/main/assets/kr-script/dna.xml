@@ -46,6 +46,17 @@
         <param name="silence" label="Удалить исходный файл после завершения" type="checkbox" />
         <param name="IMG" title="Выберите img-файл:" separator="," options-sh="samples/findfile.sh img" desc="Поместите ваш файл в путь проекта /sdcard/DNA. Инструмент автоматически определит формат img и распакует его (при распаковке super извлекаются только файлы раздела a)." required="true" multiple="true"/>
     </action>
+
+    <action interruptible="false">
+        <title>Распаковать zstd</title>
+        <set>$START_DIR/samples/u_zstd_img.sh</set>
+        <param name="silence" label="Delete source file after extraction" type="checkbox" />
+        <param name="ZST" title="Select .zst or .zstd files:"
+            options-sh="samples/findfile.sh u_zst_img"
+            desc="Scans files under /sdcard/DNA project path"
+            required="true" multiple="true" />
+    </action>
+
     <action interruptible="false">
         <title>Распаковать super</title>
         <set>dna lpunpack --partition "$img" --delete $silence --auto $auto $DNA_PRO/super.img</set>
@@ -100,6 +111,16 @@
         <param name="test1" label="Удалить шифрование данных avb" desc="Внимание: этот переключатель изменит файл fstab, операция не универсальна и может вызвать бесконечную перезагрузку." type="switch" />
     </action>
     <action interruptible="false">
+        <title>Упаковать zstd</title>
+        <set>$START_DIR/samples/zstd_img.sh</set>
+        <param name="silence" label="удалить исходный файл после завершения" type="checkbox" />
+        <param name="ZST" title="Пожалуйста выберите файлы:" 
+           options-sh="samples/findfile.sh zst_img" 
+           desc="Поместите ваш файл в путь проекта /sdcard/DNA" 
+           required="true" multiple="true"/>
+        <param name="level" required="true" value="3" label="Уровень сжатия ZSTD" desc="Примечание: Чем больше число, тем медленнее сжатие, выбирайте с умом!" type="seekbar" max="19" min="0"/>
+    </action>
+    <action interruptible="false">
         <title>Упаковать super.img</title>
         <set>dna lpmake --type $type --format $from --super_size $size --super_group $super_group $IMG_NAME</set>
         <param name="type" label="Тип">
@@ -134,17 +155,6 @@
         </param>
         <param name="brze" required="true" value="3" label="Уровень сжатия BR" desc="Внимание: чем выше значение, тем медленнее может быть процесс упаковки" type="seekbar" max="7" min="1"/>
         <param name="IMG" title="Выберите IMG-файл:" separator="," options-sh="samples/findfile.sh img" desc="Поместите ваш файл в путь проекта /sdcard/DNA" required="true" multiple="true"/>              
-    </action>
-
-    <action interruptible="false">
-        <title>Конвертация zst-img</title>
-        <set>$START_DIR/samples/zstd_img.sh</set>
-        <param name="silence" label="Удалить исходный файл" type="checkbox" />
-        <param name="ZST" title="Выберите файл:" 
-           options-sh="samples/findfile.sh zst_img" 
-           desc="Поместите ваш файл в путь проекта /sdcard/DNA" 
-           required="true" multiple="true"/>
-        <param name="level" required="true" value="3" label="Уровень сжатия zstd" desc="Внимание: чем выше значение, тем медленнее сжатие!" type="seekbar" max="19" min="0"/>
     </action>
 
     <action>
