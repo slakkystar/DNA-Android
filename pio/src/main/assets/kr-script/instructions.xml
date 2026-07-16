@@ -2,5 +2,5 @@
 <page>
     <page title="Firmware Unpacking and All Its Features" config="kr-script/instructions/unpack.xml" />
     <page title="Firmware Packing and All Its Features" config="kr-script/instructions/repack.xml" />
-<!--    <page title="Guide to Porting Various Firmwares" config="kr-script/instructions/porting.xml" /> -->
+    <page title="Guide to Porting Various Firmwares" config="kr-script/instructions/porting.xml" />
 </page>

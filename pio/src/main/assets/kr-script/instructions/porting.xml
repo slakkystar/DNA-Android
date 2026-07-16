@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<page>
+    <text>
+        <slice size="22" bold="true" break="true">Porting ColorOS / OxygenOS / RealmeUI</slice>
+        <slice break="true">The port is based on two firmware packages: the "base" (ColorOS/OxygenOS/RealmeUI — the source of the shell itself) and the "stock" firmware of the phone to which the port is being transferred.</slice>
+        <slice break="true" color="#ff9500">Any base with the same SoC as the target device is suitable for porting — MTK only to MTK, Qualcomm only to Qualcomm.</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">Step 1. Unpacking the Base</slice>
+        <slice break="true">Unpack the payload.bin of the ColorOS/OxygenOS/RealmeUI base and extract the following partitions:</slice>
+        <slice break="true" bold="true">system, system_ext, product, all my_** (my_manifest, my_product, etc.), vendor, odm</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">Step 2. Unpacking the Stock Firmware</slice>
+        <slice break="true">Download the stock firmware of the phone to which you are porting and extract from it:</slice>
+        <slice break="true" bold="true">vendor, odm, system_ext, **_dlkm (if present)</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">Step 3. Transferring VNDK APEX</slice>
+        <slice break="true">Copy all vndk apex files from stock/system_ext/apex/ to ColorOS/system_ext/apex/.</slice>
+        <slice break="true">If such an apex is not yet present in ColorOS (e.g., vndk34 is missing) — copy it.</slice>
+        <slice break="true">If such an apex already exists — leave it untouched by default.</slice>
+        <slice break="true" color="#ff9500">Exception: if a bootloop occurs after building and flashing — try replacing the already existing apex with the version from stock, even if it was already there.</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">Step 4. Copying group and passwd</slice>
+        <slice break="true">Copy two files — group and passwd — from ColorOS/vendor/etc/ to stock/vendor/etc/ (with replacement).</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">Step 5. Merging my-partitions</slice>
+        <slice break="true">Run the script that merges my_** partitions with system:</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">Step 6. Editing build.prop</slice>
+        <slice break="true">In system/my_manifest/build.prop, completely delete the line:</slice>
+        <slice break="true" bold="true" color="#ff9500">ro.product.first_api_level</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">Step 7. First Boot</slice>
+        <slice break="true">At this stage, you can try to build the firmware and boot.</slice>
+        <slice break="true" bold="true">If it does not boot:</slice>
+        <slice break="true">1. Copy ColorOS/odm/build.prop to stock/odm/build.prop</slice>
+        <slice break="true">2. Add the following line to the end of stock/odm/etc/build.prop:</slice>
+        <slice break="true" bold="true">import /odm/build.prop</slice>
+        <slice break="true">After this, the firmware should boot.</slice>
+        <slice break="true" color="#ff9500">If it still does not boot — try changing the base (remember about SoC matching, see Step 1).</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">How to Build Properly</slice>
+        <slice break="true">It is recommended to build in erofs, raw format.</slice>
+        <slice break="true" bold="true">Build from ColorOS/OxygenOS/RealmeUI (base):</slice>
+        <slice break="true">system, product, system_ext</slice>
+        <slice break="true" bold="true">Build from stock firmware:</slice>
+        <slice break="true">vendor, odm, all **_dlkm (including system_dlkm)</slice>
+        <slice break="true" color="#ff9500">A vendor partition from any Android version is suitable for the port — to any Android version of the base.</slice>
+    </text>
+</page>
