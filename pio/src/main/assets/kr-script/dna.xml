@@ -223,7 +223,7 @@
          "$START_DIR/samples/my_partition_merge.sh"
         </set>
     </action>
-    
+
     <action>
         <title>Patch vbmeta</title>
        <set>
@@ -242,5 +242,14 @@
                options-sh="samples/findfile.sh vbmeta"
                desc="Select vbmeta image files in the /sdcard/DNA folder and project folders"
                required="true" multiple="true"/>
+    </action>
+
+    <action>
+        <title>Enable SELinux permissive mode</title>
+        <desc>Edits header file in boot for set permissive mode</desc>
+        <set>
+         chmod +x "$START_DIR/samples/set_permissive.sh"
+         "$START_DIR/samples/set_permissive.sh"
+        </set>
     </action>
 </group>
