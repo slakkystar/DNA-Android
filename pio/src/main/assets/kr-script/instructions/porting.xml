@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<page>
+    <text>
+        <slice size="22" bold="true" break="true">Портирование ColorOS / OxygenOS / RealmeUI</slice>
+        <slice break="true">Порт делается на основе двух прошивок: "базы" (ColorOS/OxygenOS/RealmeUI — источник самой оболочки) и "стоковой" прошивки телефона, на который переносится порт.</slice>
+        <slice break="true" color="#ff9500">Для порта подходит любая база с тем же SoC, что и у целевого устройства — MTK переносится только на MTK, Qualcomm только на Qualcomm.</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">Шаг 1. Распаковка базы</slice>
+        <slice break="true">Распакуй payload.bin базы ColorOS/OxygenOS/RealmeUI и извлеки следующие разделы:</slice>
+        <slice break="true" bold="true">system, system_ext, product, все my_** (my_manifest, my_product и т.д.), vendor, odm</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">Шаг 2. Распаковка стоковой прошивки</slice>
+        <slice break="true">Скачай стоковую прошивку телефона, на который делаешь порт, и извлеки из неё:</slice>
+        <slice break="true" bold="true">vendor, odm, system_ext, **_dlkm (если присутствует)</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">Шаг 3. Перенос VNDK APEX</slice>
+        <slice break="true">Скопируй все vndk apex из stock/system_ext/apex/ в ColorOS/system_ext/apex/.</slice>
+        <slice break="true">Если такого apex ещё нет в ColorOS (например, vndk34 отсутствует) — скопируй его.</slice>
+        <slice break="true">Если такой apex уже есть — по умолчанию ничего не трогай.</slice>
+        <slice break="true" color="#ff9500">Исключение: если после сборки и прошивки возникает bootloop — попробуй заменить уже существующий apex на версию из stock, даже если он там уже был.</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">Шаг 4. Копирование group и passwd</slice>
+        <slice break="true">Скопируй два файла — group и passwd — из ColorOS/vendor/etc/ в stock/vendor/etc/ (с заменой).</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">Шаг 5. Плагин объединения my-разделов</slice>
+        <slice break="true">Установи плагин, который объединяет my_** разделы с system:</slice>
+        <slice break="true" link="https://github.com/slakkystar/DNA-Android/blob/beta/plugins/合并my分区到system.zip2">Плагин: объединение my-разделов в system</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">Шаг 6. Правка build.prop</slice>
+        <slice break="true">В system/my_manifest/build.prop полностью удали строку:</slice>
+        <slice break="true" bold="true" color="#ff9500">ro.product.first_api_level</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">Шаг 7. Первая загрузка</slice>
+        <slice break="true">На этом этапе можно попробовать собрать прошивку и загрузиться.</slice>
+        <slice break="true" bold="true">Если не загружается:</slice>
+        <slice break="true">1. Скопируй ColorOS/odm/build.prop в stock/odm/build.prop</slice>
+        <slice break="true">2. В конец файла stock/odm/etc/build.prop добавь строку:</slice>
+        <slice break="true" bold="true">import /odm/build.prop</slice>
+        <slice break="true">После этого прошивка должна загрузиться.</slice>
+        <slice break="true" color="#ff9500">Если всё ещё не загружается — попробуй сменить базу (не забывай про совпадение SoC, см. Шаг 1).</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">Как правильно собирать</slice>
+        <slice break="true">Желательно собирать в формате erofs, raw.</slice>
+        <slice break="true" bold="true">Из ColorOS/OxygenOS/RealmeUI (базы) собираются:</slice>
+        <slice break="true">system, product, system_ext</slice>
+        <slice break="true" bold="true">Из стоковой прошивки собираются:</slice>
+        <slice break="true">vendor, odm, все **_dlkm (включая system_dlkm)</slice>
+        <slice break="true" color="#ff9500">Для порта подходит vendor любой версии Android — на любую версию Android базы.</slice>
+    </text>
+</page>

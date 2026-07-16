@@ -2,5 +2,5 @@
 <page>
     <page title="Распаковка прошивки и все её функции" config="kr-script/instructions/unpack.xml" />
     <page title="Упаковка прошивки и все её возможности" config="kr-script/instructions/repack.xml" />
-<!--    <page title="Руководство по портированию различных прошивок" config="kr-script/instructions/porting.xml" /> -->
+    <page title="Руководство по портированию различных прошивок" config="kr-script/instructions/porting.xml" />
 </page>
