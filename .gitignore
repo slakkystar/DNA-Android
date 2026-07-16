@@ -15,3 +15,4 @@ release_mini
 gradle
 app/build.gradle
 *.patch
+*.bak

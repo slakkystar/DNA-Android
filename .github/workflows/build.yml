@@ -1,13 +1,6 @@
 name: Build APK
 
 on:
-  push:
-    branches: [ main, master ]
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
-  pull_request:
-    branches: [ main, master ]
   workflow_dispatch: {}
 
 jobs:
@@ -93,25 +86,25 @@ jobs:
             --ks-pass pass:"$KEYSTORE_PASSWORD" \
             --key-pass pass:"$KEY_PASSWORD" \
             --ks-key-alias "$KEY_ALIAS" \
-            --out pio-release_mini-signed.apk \
+            --out dna-release-2.2.0-EN-signed.apk \
             pio-release_mini-aligned.apk
           rm -f release.keystore
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: dna-debug-2.1.0-apk
+          name: dna-debug-2.2.0-apk
           path: pio/build/outputs/apk/debug/*.apk
 
       - name: Upload release_mini APK (unsigned)
         uses: actions/upload-artifact@v4
         with:
-          name: dna-release-2.1.0-EN-unsigned
+          name: dna-release-2.2.0-EN-unsigned
           path: pio/build/outputs/apk/release_mini/*.apk
 
       - name: Upload signed release_mini APK
         if: steps.signing.outputs.enabled == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: dna-release-2.1.0-EN-signed
-          path: pio-release_mini-signed.apk
+          name: dna-release-2.2.0-EN-signed
+          path: dna-release-2.2.0-EN-signed.apk
