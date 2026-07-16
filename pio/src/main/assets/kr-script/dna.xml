@@ -214,4 +214,13 @@
             <option value="25">25</option>
         </param>
     </action>
+
+    <action>
+        <title>Merge the my_ partition with the system partition</title>
+        <desc>Merges ColorOS-specific my_** partitions into system</desc>
+        <set>
+         chmod +x "$START_DIR/samples/my_partition_merge.sh"
+         "$START_DIR/samples/my_partition_merge.sh"
+        </set>
+    </action>
 </group>
