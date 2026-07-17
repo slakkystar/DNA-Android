@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <page>
     <page title="ColorOS / OxygenOS / RealmeUI" config="kr-script/instructions/color.xml" />
+    <page title="ColorOS / OxygenOS / RealmeUI (auto port)" config="kr-script/instructions/color_auto.xml" />
     <page title="HyperOS" config="kr-script/instructions/hyperos.xml" />
 </page>

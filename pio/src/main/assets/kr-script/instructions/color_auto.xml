@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<page>
+    <text>
+        <slice size="22" bold="true" break="true">Automated Porting of ColorOS / OxygenOS / RealmeUI</slice>
+        <slice break="true">This guide describes the process of creating a port using the auto-port script. The port is built on the basis of two firmware packages: the base (ColorOS/OxygenOS/RealmeUI — the donor shell) and the stock firmware of the phone to which the port is being transferred.</slice>
+        <slice break="true" color="#ff9500">Important rule: Any base with the same processor (SoC) as the target device is suitable for porting — MTK only to MTK, Qualcomm only to Qualcomm.</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">Step 1. Preparing and Unpacking Firmware</slice>
+        <slice break="true">Unpack the payload.bin files of both firmware packages. For the automatic script to work correctly, the folders must be named strictly in a certain way:</slice>
+        <slice break="true" bold="true" color="#00ff00">Name the stock firmware project "stok" MANDATORILY</slice>
+        <slice break="true" bold="true" color="#00ff00">Name the base (donor) firmware project "port" MANDATORILY</slice>
+        <slice break="true" bold="true">From the base firmware (into the port folder), extract the following partitions:</slice>
+        <slice break="true">system, system_ext, product, all my_** (my_manifest, my_product, etc.), vendor, odm</slice>
+        <slice break="true" bold="true">From the stock firmware (into the stok folder), extract the following partitions:</slice>
+        <slice break="true">vendor, odm, system_ext, **_dlkm (if present)</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">Step 2. Merging my-partitions with system</slice>
+        <slice break="true">Run the special my partition merge script.</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">Step 3. Running the Auto-port Script</slice>
+        <slice break="true">After the merge is complete, run the main auto-port script.</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">Step 4. Proper Building</slice>
+        <slice break="true">After the script has successfully completed, you can proceed to repacking the images.</slice>
+        <slice break="true">It is recommended to build images in erofs, raw format.</slice>
+        <slice break="true" bold="true">Build the following partitions from the base folder (port):</slice>
+        <slice break="true">system, product, system_ext</slice>
+        <slice break="true" bold="true">Build the following partitions from the stock folder (stok):</slice>
+        <slice break="true">vendor, odm, all **_dlkm (including system_dlkm)</slice>
+        <slice break="true" color="#ff9500">The vendor partition from any Android version is suitable for the port — to any Android version of the base.</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">Step 5. Troubleshooting First Boot (Bootloop)</slice>
+        <slice break="true" bold="true">If the device does not boot after building and flashing (bootloop):</slice>
+        <slice break="true">Try forcibly replacing all VNDK APEX files in the port/system_ext/apex/ folder with versions from the stok folder.</slice>
+        <slice break="true">After these actions, the firmware should boot.</slice>
+        <slice break="true" color="#ff9500">If the device still does not boot — try changing the base (remember about matching SoC processors, see the first step).</slice>
+    </text>
+</page>

@@ -225,6 +225,14 @@
     </action>
 
     <action>
+        <title>ColorOS auto port (read guide for more Info)</title>
+        <set>
+         chmod +x "$START_DIR/samples/color_auto.sh"
+         "$START_DIR/samples/color_auto.sh"
+        </set>
+    </action>
+
+    <action>
         <title>Patch vbmeta</title>
        <set>
          chmod +x "$START_DIR/tools/patch_vbmeta"
