@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<page>
+    <text>
+        <slice size="22" bold="true" break="true">Porting HyperOS</slice>
+        <slice break="true">The port is based on two firmware packages: the "donor" (HyperOS base — the source of the shell itself) and the "stock" firmware of the phone to which the port is being transferred.</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">Step 1. Unpacking the Donor (HyperOS base)</slice>
+        <slice break="true">Unpack the payload.bin of the HyperOS donor firmware and extract the following partitions:</slice>
+        <slice break="true" bold="true">system, product, system_ext, mi_ext</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">Step 2. Unpacking the Stock Firmware</slice>
+        <slice break="true">Download the stock firmware of the phone to which you are porting and extract from it:</slice>
+        <slice break="true" bold="true">product, system_ext</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">Step 3. Device features</slice>
+        <slice break="true">Copy all files from:</slice>
+        <slice break="true" bold="true">stock/product/etc/device_features/</slice>
+        <slice break="true">into the same path on the donor:</slice>
+        <slice break="true" bold="true">hyper/product/etc/device_features/</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">Step 4. Display config</slice>
+        <slice break="true">Copy all files (overwrite existing ones) from:</slice>
+        <slice break="true" bold="true">stock/product/etc/displayconfig/</slice>
+        <slice break="true">into the same path on the donor:</slice>
+        <slice break="true" bold="true">hyper/product/etc/displayconfig/</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">Step 5. Transferring VNDK APEX</slice>
+        <slice break="true">Copy all vndk apex files from:</slice>
+        <slice break="true" bold="true">stock/system_ext/apex/</slice>
+        <slice break="true">into the same path on the donor:</slice>
+        <slice break="true" bold="true">hyper/system_ext/apex/</slice>
+        <slice break="true" color="#ff9500">This is the same technique used for ColorOS/OxygenOS/RealmeUI ports — see that guide if you need more detail on handling existing/duplicate apex files.</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">Step 6. Moving pangu system files</slice>
+        <slice break="true">Move all files from:</slice>
+        <slice break="true" bold="true">hyper/product/pangu/system/</slice>
+        <slice break="true">into:</slice>
+        <slice break="true" bold="true">hyper/system/system/</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">Step 7. Merging mi_ext build.prop</slice>
+        <slice break="true">Take all lines from:</slice>
+        <slice break="true" bold="true">mi_ext/etc/build.prop</slice>
+        <slice break="true">and add them into:</slice>
+        <slice break="true" bold="true">hyper/product/etc/build.prop</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">Step 8. Merging mi_ext/product files</slice>
+        <slice break="true">Move all files from:</slice>
+        <slice break="true" bold="true">mi_ext/product/</slice>
+        <slice break="true">into:</slice>
+        <slice break="true" bold="true">hyper/product/</slice>
+        <slice break="true">Once this step is done, the porting steps are complete — you can move on to building.</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">How to Build Properly</slice>
+        <slice break="true" bold="true">Build from stock firmware:</slice>
+        <slice break="true">vendor, odm, all *_dlkm</slice>
+        <slice break="true" bold="true">Build from the HyperOS donor (base):</slice>
+        <slice break="true">system, product, system_ext</slice>
+        <slice break="true" bold="true">super.img:</slice>
+        <slice break="true">Build super.img using the same size and type (a_only / A-B) as the stock firmware's super partition.</slice>
+    </text>
+</page>

@@ -20,7 +20,7 @@
     <string name="engine_version_name">Built on [Kr-Script4.0.3]</string>
 
     <string name="tab_home">Home</string>
-    <string name="tab_favorites">Favorites</string>
+    <string name="tab_favorites">Home</string>
     <string name="tab_pages">Other</string>
 
     <string name="monitor_laod">Load: %d%%</string>

@@ -49,10 +49,15 @@ jobs:
         run: chmod +x gradlew
 
       - name: Build debug APK
-        run: ./gradlew :pio:assembleDebug --stacktrace
+        shell: bash
+        run: |
+          set -o pipefail
+          ./gradlew :pio:assembleDebug --stacktrace 2>&1 | tee debug_build.log
 
       - name: Build release_mini APK (unsigned, minified)
-        run: ./gradlew :pio:assembleRelease_mini --stacktrace
+        run: |
+          set -o pipefail
+          ./gradlew :pio:assembleRelease_mini --stacktrace 2>&1 | tee release_build.log
 
       - name: Check for signing secrets
         id: signing
@@ -86,25 +91,41 @@ jobs:
             --ks-pass pass:"$KEYSTORE_PASSWORD" \
             --key-pass pass:"$KEY_PASSWORD" \
             --ks-key-alias "$KEY_ALIAS" \
-            --out dna-release-2.2.0-EN-signed.apk \
+            --out DNA-BETA-2.3.0-EN-signed.apk \
             pio-release_mini-aligned.apk
           rm -f release.keystore
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: dna-debug-2.2.0-apk
+          name: dna-debug-2.3.0-apk
           path: pio/build/outputs/apk/debug/*.apk
 
       - name: Upload release_mini APK (unsigned)
         uses: actions/upload-artifact@v4
         with:
-          name: dna-release-2.2.0-EN-unsigned
+          name: DNA-BETA-2.3.0-EN-unsigned
           path: pio/build/outputs/apk/release_mini/*.apk
 
       - name: Upload signed release_mini APK
         if: steps.signing.outputs.enabled == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: dna-release-2.2.0-EN-signed
-          path: dna-release-2.2.0-EN-signed.apk
+          name: DNA-BETA-2.3.0-EN
+          path: DNA-BETA-2.3.0-EN-signed.apk
+
+      - name: Collect full build logs
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p logs
+          [ -f debug_build.log ] && cp debug_build.log logs/
+          [ -f release_build.log ] && cp release_build.log logs/
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dna-build-logs
+          path: logs/
+          if-no-files-found: warn
