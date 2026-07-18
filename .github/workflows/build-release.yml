@@ -1,0 +1,156 @@
+name: Build release APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: 'Create a GitHub Release for this build'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17 (for sdkmanager)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up JDK 8 (for Gradle/AGP build)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '8'
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle', 'gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        env:
+          JAVA_HOME: ${{ env.JAVA_HOME_17_X64 }}
+
+      - name: Install required SDK components
+        env:
+          JAVA_HOME: ${{ env.JAVA_HOME_17_X64 }}
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platforms;android-28" "build-tools;28.0.3" "build-tools;34.0.0" "platform-tools"
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Read versionName from build.gradle
+        id: appversion
+        run: |
+          VERSION_NAME=$(sed -nE 's/.*versionName[[:space:]]+"([^"]+)".*/\1/p' pio/build.gradle | head -n1)
+          if [ -z "$VERSION_NAME" ]; then
+            echo "::error::versionName not found in pio/build.gradle"
+            exit 1
+          fi
+          echo "version=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          echo "Detected versionName: $VERSION_NAME"
+
+      - name: Build Release APK
+        shell: bash
+        run: |
+          set -o pipefail
+          ./gradlew :pio:assembleDebug --stacktrace 2>&1 | tee release_build.log
+
+      - name: Check for signing secrets
+        id: signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Decode signing keystore
+        if: steps.signing.outputs.enabled == 'true'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: echo "$KEYSTORE_BASE64" | base64 -d > release.keystore
+
+      - name: Sign Release APK
+        if: steps.signing.outputs.enabled == 'true'
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          set -x
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/34.0.0"
+
+          echo "--- Contents of pio/build/outputs/apk/debug ---"
+          find pio/build/outputs/apk/debug -type f
+
+          UNSIGNED_APK=$(find pio/build/outputs/apk/debug -name "*.apk" | head -n1)
+          if [ -z "$UNSIGNED_APK" ]; then
+            echo "::error::No .apk file found in pio/build/outputs/apk/debug"
+            exit 1
+          fi
+          echo "Found unsigned APK: $UNSIGNED_APK"
+
+          "$BUILD_TOOLS/zipalign" -v -f 4 "$UNSIGNED_APK" pio-debug-aligned.apk
+          ls -la pio-debug-aligned.apk
+
+          "$BUILD_TOOLS/apksigner" sign \
+            --ks release.keystore \
+            --ks-pass pass:"$KEYSTORE_PASSWORD" \
+            --key-pass pass:"$KEY_PASSWORD" \
+            --ks-key-alias "$KEY_ALIAS" \
+            --out "DNA-${{ steps.appversion.outputs.version }}-release-signed.apk" \
+            pio-debug-aligned.apk
+
+          rm -f release.keystore
+
+      - name: Upload release APK
+        if: steps.signing.outputs.enabled == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: DNA-${{ steps.appversion.outputs.version }}-release
+          path: DNA-${{ steps.appversion.outputs.version }}-release-signed.apk
+
+      - name: Collect full build logs
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p logs
+          [ -f release_build.log ] && cp release_build.log logs/
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dna-build-logs
+          path: logs/
+          if-no-files-found: warn
+
+      - name: Create GitHub Release
+        if: ${{ inputs.create_release && steps.signing.outputs.enabled == 'true' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.appversion.outputs.version }}
+          name: DNA ${{ steps.appversion.outputs.version }}
+          generate_release_notes: true
+          prerelease: false
+          files: DNA-${{ steps.appversion.outputs.version }}-release-signed.apk
