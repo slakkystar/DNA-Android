@@ -38,5 +38,16 @@ for i in ${sub};do
   echo "> Deleted!"
 done
 }
+#Clear project
+RM () {
+if [ -d $DNA_DRO ]; then
+  project=$(cat $TMPDIR/DNA.ini)
+  echo "> Clearing $project!"
+  rm -rf $DNA_DRO/*
+  echo "> $project cleared"
+else
+  echo "> $DNA_DRO not found"
+fi
+}
 
 $1

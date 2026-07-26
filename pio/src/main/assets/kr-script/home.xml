@@ -19,6 +19,11 @@
            <set>samples/project.sh XJ</set>
            <param name="T" placeholder="Enter project name (do not use Chinese characters):" required="true"/>
     </action>
+    
+    <action>
+           <title>Clear Project</title>
+           <set>samples/project.sh RM</set>
+    </action>
 
     <page title="Project Menu" config="file:///android_asset/kr-script/dna.xml">
             <lock>
