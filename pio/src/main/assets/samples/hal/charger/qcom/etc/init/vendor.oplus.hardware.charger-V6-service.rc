@@ -1,0 +1,37 @@
+service oplus_charger_hal_service /odm/bin/hw/vendor.oplus.hardware.charger-V6-service
+    interface aidl vendor.oplus.hardware.charger.ICharger/default
+    class hal
+    user system
+    group system root
+
+on boot
+    chown system system /dev/wls_dev
+    chmod 0660 /dev/wls_dev
+    
+on charger
+    chown system system /dev/wls_dev
+    chmod 0660 /dev/wls_dev
+
+on property:sys.boot_completed=1
+    write /proc/ui_soc_decimal 1
+    chmod 0666 /sys/class/power_supply/battery/current_now
+    chmod 0666 /sys/class/power_supply/battery/charge_control_limit
+    chmod 0666 /sys/class/qcom-battery/charge_control_limit
+    chown system system /proc/charger/reserve_soc_debug
+    chown system system /proc/charger_cycle
+    chmod 0644 /sys/class/power_supply/battery/time_to_full_now
+    chown system system /sys/class/power_supply/battery/time_to_full_now
+    chown system system /proc/device-tree/soc/qcom,pmic_glink/qcom,battery_charger/qcom,pmic_ftm_vbat
+    chown system system /proc/device-tree/soc/qcom,pmic_glink/qcom,battery_charger/qcom,pmic_ftm_vph
+    chown system system /sys/bus/platform/devices/ext-power-throttling/ext_power_throttle_ut
+    chown system system /proc/usb/repeater_parameters
+    chmod 0666 /proc/usb/repeater_parameters
+
+on boot
+    
+    chown system system /sys/class/power_supply/battery/current_now
+    chmod 0664 /sys/class/power_supply/battery/current_now
+
+on charger
+    chown system system /sys/class/power_supply/battery/current_now
+    chmod 0664 /sys/class/power_supply/battery/current_now

@@ -10,4 +10,13 @@
             "$START_DIR/samples/cos/stability.sh"
         </set>
     </action>
+
+    <action>
+        <title>Charging HAL Fix</title>
+        <desc>Automatic detection of SOC/version and installation of the required charger HAL in odm/vendor-odm</desc>
+        <set>
+            chmod +x "$START_DIR/samples/cos/charger.sh"
+            "$START_DIR/samples/cos/charger.sh"
+        </set>
+    </action>
 </group>

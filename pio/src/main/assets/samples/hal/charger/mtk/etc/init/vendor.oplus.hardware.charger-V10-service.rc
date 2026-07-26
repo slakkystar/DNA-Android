@@ -1,0 +1,35 @@
+service oplus_charger_hal_service /odm/bin/hw/vendor.oplus.hardware.charger-V10-service
+    interface aidl vendor.oplus.hardware.charger.ICharger/default
+    class hal
+    user system
+    group system root
+
+on boot
+    chown system system /dev/wls_dev
+    chmod 0660 /dev/wls_dev
+
+on charger
+    chown system system /dev/wls_dev
+    chmod 0660 /dev/wls_dev
+
+on property:sys.boot_completed=1
+    write /proc/ui_soc_decimal 1
+    chmod 0666 /sys/class/power_supply/battery/current_now
+    chmod 0666 /sys/class/power_supply/battery/charge_control_limit
+    chmod 0644 /sys/class/power_supply/battery/time_to_full_now
+    chown system system /sys/class/power_supply/battery/time_to_full_now
+    chown system system /sys/class/power_supply/battery/charge_control_limit
+    chown system system /sys/class/power_supply/bms/fastcharge_mode
+    chown system system /sys/class/power_supply/bms/soh
+    chown system system /sys/class/power_supply/bms/cycle_count
+    chown system system /sys/class/power_supply/cp_master/cp_ibus
+    chown system system /sys/class/power_supply/cp_master/cp_vbus
+    chown system system /sys/class/power_supply/cp_master/chip_ok
+
+on boot
+    chown system system /sys/class/power_supply/battery/current_now
+    chmod 0664 /sys/class/power_supply/battery/current_now
+
+on charger
+    chown system system /sys/class/power_supply/battery/current_now
+    chmod 0664 /sys/class/power_supply/battery/current_now
