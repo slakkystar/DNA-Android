@@ -1,0 +1,5 @@
+service oplus.hardware.olc-2-0 /odm/bin/hw/vendor.oplus.hardware.olc2-V1-service
+    interface aidl vendor.oplus.hardware.olc2::IOplusLogCore/default
+    class hal
+    user root
+    group system log media_rw

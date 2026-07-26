@@ -1,0 +1,14 @@
+
+import /odm/build.prop
+import /my_bigball/build.prop
+import /my_carrier/build.prop
+import /my_company/build.prop
+import /my_engineering/build.prop
+import /my_heytap/build.prop
+import /my_manifest/build.prop
+import /my_preload/build.prop
+import /my_product/build.prop
+import /my_region/build.prop
+import /my_stock/build.prop
+import /odm/etc/${ro.boot.product.hardware.sku}_build.prop
+import /odm/build.prop

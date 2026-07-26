@@ -1,0 +1,7 @@
+<manifest version="1.0" type="device">
+    <hal format="aidl">
+        <name>vendor.oplus.hardware.olc2</name>
+        <version>1</version>
+        <fqname>IOplusLogCore/default</fqname>
+    </hal>
+</manifest>

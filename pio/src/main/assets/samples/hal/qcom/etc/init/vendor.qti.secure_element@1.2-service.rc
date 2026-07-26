@@ -1,0 +1,10 @@
+service secureelement-hal_1_2 /odm/bin/hw/vendor.qti.secure_element@1.2-service
+##ifndef OPLUS_BUG_STABILITY
+##Liuwenjie@CONNECTIVITY.NFC.CARDEMULATION.3190409, 2022/02/23,
+##Modify for: Server run later ,avoid loader TA fail
+    #class early_hal
+##else
+    class hal
+##endif OPLUS_BUG_STABILITY
+    user system
+    group system

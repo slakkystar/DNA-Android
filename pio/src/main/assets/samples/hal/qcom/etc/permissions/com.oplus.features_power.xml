@@ -1,0 +1,4 @@
+<permissions>
+    <!-- wangmengmeng@BSP.Power.Framework, 2020/09/07, add for midas support -->
+    <feature name="oplus.obrain.support" />
+</permissions>

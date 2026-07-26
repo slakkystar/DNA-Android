@@ -19,4 +19,13 @@
             "$START_DIR/samples/cos/charger.sh"
         </set>
     </action>
+
+    <action>
+        <title>QCOM Extra Hals</title>
+        <desc>Additional hals for qcom , for better optimization </desc>
+        <set>
+            chmod +x "$START_DIR/samples/cos/extra_qcom.sh"
+            "$START_DIR/samples/cos/extra_qcom.sh"
+        </set>
+    </action>
 </group>

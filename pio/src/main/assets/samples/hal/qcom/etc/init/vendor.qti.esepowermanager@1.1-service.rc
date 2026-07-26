@@ -1,0 +1,16 @@
+#
+# Copyright (c) 2017-2018, 2020 Qualcomm Technologies, Inc.
+# All Rights Reserved.
+# Confidential and Proprietary - Qualcomm Technologies, Inc.
+#
+
+service qti_esepowermanager_service_1_1 /odm/bin/hw/vendor.qti.esepowermanager@1.1-service
+##ifndef OPLUS_BUG_STABILITY
+##Liuwenjie@CONNECTIVITY.NFC.CARDEMULATION.3190409, 2022/02/23,
+##Modify for: Server run later ,avoid loader TA fail
+    #class early_hal
+##else
+    class hal
+##endif OPLUS_BUG_STABILITY
+    user system
+    group nfc system
