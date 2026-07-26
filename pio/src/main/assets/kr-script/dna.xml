@@ -139,6 +139,24 @@
     </action>
 </group>
 
+<group title="Auto Port">
+    <action interruptible="false">
+        <title>Auto-Port HyperOS</title>
+        <set>
+            chmod +x "$START_DIR/samples/hyperos_port.sh"
+            "$START_DIR/samples/hyperos_port.sh"
+        </set>
+    </action>
+
+    <action>
+        <title>ColorOS auto port (read guide for more Info)</title>
+        <set>
+         chmod +x "$START_DIR/samples/color_auto.sh"
+         "$START_DIR/samples/color_auto.sh"
+        </set>
+    </action>
+</group>
+
 <group title="Format Conversion">
     <action interruptible="false">
         <title>img to simg</title>
@@ -221,14 +239,6 @@
         <set>
          chmod +x "$START_DIR/samples/my_partition_merge.sh"
          "$START_DIR/samples/my_partition_merge.sh"
-        </set>
-    </action>
-
-    <action>
-        <title>ColorOS auto port (read guide for more Info)</title>
-        <set>
-         chmod +x "$START_DIR/samples/color_auto.sh"
-         "$START_DIR/samples/color_auto.sh"
         </set>
     </action>
 
