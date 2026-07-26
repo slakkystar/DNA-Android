@@ -9,6 +9,10 @@
     </page>
 </group>
 
+<group title="Fixes for ROMs">
+    <page title="ColorOS Fixes" config="file:///android_asset/kr-script/fix/cos.xml" />
+</group>
+
 <group title="Unpack Menu">
     <action interruptible="false">
         <title>Unpack payload.bin</title>

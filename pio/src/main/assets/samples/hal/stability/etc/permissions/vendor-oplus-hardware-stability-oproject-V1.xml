@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<permissions>
+    <library name="vendor.oplus.hardware.stability.oplus_project-V1"
+          file="/system/system_ext/framework/vendor.oplus.hardware.stability.oplus_project-V1-java.jar"/>
+    <library name="vendor.oplus.hardware.stability.oplus_project"
+          file="/system/system_ext/framework/vendor.oplus.hardware.stability.oplus_project-V2-java.jar"/>
+</permissions>

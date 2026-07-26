@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<resource dir="file:///android_asset/samples" />
+
+<group title="HAL fixes">
+    <action>
+        <title>Power button delay fix</title>
+        <desc>will completely add OPlus HAL under the name "stability"</desc>
+        <set>
+            chmod +x "$START_DIR/samples/cos/stability.sh"
+            "$START_DIR/samples/cos/stability.sh"
+        </set>
+    </action>
+</group>

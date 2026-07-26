@@ -1,0 +1,6 @@
+service oplus.oplus_project-1 /odm/bin/hw/vendor.oplus.hardware.stability.oplus_project-V1-service
+    class hal
+    user system
+    group system
+    interface aidl vendor.oplus.hardware.stability.oplus_project.IOplusProject/default
+
