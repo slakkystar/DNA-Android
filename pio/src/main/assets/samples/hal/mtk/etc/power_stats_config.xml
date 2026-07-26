@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<powerStatsConfig>
+    <nodepath>
+        <node platform="qcom">/sys/module/qcom_stats/rpmh_stats/oplus_rpmh_master_stats</node>
+        <node platform="qcom">/sys/module/qcom_stats/soc_sleep/oplus_rpmh_stats</node>
+        <node platform="qcom">/sys/module/soc_sleep_stats/rpmh_stats/oplus_rpmh_master_stats</node>
+        <node platform="qcom">/sys/module/soc_sleep_stats/soc_sleep/oplus_rpmh_stats</node>
+        <node platform="mtk">/proc/mtk_lpm/cpuidle/spm/subsystem_stats</node>
+        <node platform="mtk">/proc/mtk_lpm/spm/system_stats</node>
+        <node platform="mtk">/proc/mtk_lpm/spm/system_stat</node>
+    </nodepath>
+    <map>
+        <!--qcom-->
+        <name non_standard="vmin">vmin</name>
+        <name non_standard="vlow">vlow</name>
+        <name non_standard="apss">apss</name>
+        <name non_standard="mpss">mpss</name>
+        <name non_standard="modem">mpss</name>
+        <name non_standard="adsp">adsp</name>
+        <name non_standard="adsp_island">adsp_island</name>
+        <name non_standard="cdsp">cdsp</name>
+        <name non_standard="slpi">slpi</name>
+        <name non_standard="slpi_island">slpi_island</name>
+        <name non_standard="wpss">wpss</name>
+        <!--MTK-->
+        <name non_standard="AP">apss</name>
+        <name non_standard="MD">mpss</name>
+        <name non_standard="26M">vmin</name>
+        <name non_standard="Idle AP">apss_idle</name>
+        <name non_standard="Idle 26M">mpss_idle</name>
+        <name non_standard="Idle VCORE">vcore_idle</name>
+        <name non_standard="Suspend AP">apss</name>
+        <name non_standard="Suspend 26M">vmin</name>
+        <name non_standard="Suspend VCORE">vcore</name>
+        <name non_standard="MD">mpss</name>
+        <name non_standard="MD_2G">mpss_2g</name>
+        <name non_standard="MD_3G">mpss_3g</name>
+        <name non_standard="MD_4G">mpss_4g</name>
+        <name non_standard="MD_5G">mpss_5g</name>
+    </map>
+</powerStatsConfig>

@@ -1,0 +1,7 @@
+# Add 'readproc' for 'proc/pid/task/tid/*'
+service oplus.powermonitor.hal.service-1-0 /odm/bin/hw/vendor-oplus-hardware-power-powermonitor-V1-service
+    class hal
+    capabilities SYS_PTRACE
+    user system
+    group system readproc
+    interface aidl vendor.oplus.hardware.power.powermonitor.IPowerMonitor/default

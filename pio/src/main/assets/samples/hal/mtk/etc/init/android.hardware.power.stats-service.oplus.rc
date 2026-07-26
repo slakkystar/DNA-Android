@@ -1,0 +1,5 @@
+service vendor.power.stats /odm/bin/hw/android.hardware.power.stats-impl.oplus
+    class hal
+    user system
+    group system root
+

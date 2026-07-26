@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<permissions>
+    <library name="vendor.oplus.hardware.olc2-V1"
+          file="/system/system_ext/framework/vendor.oplus.hardware.olc2-V1-java.jar"/>
+    <library name="vendor.oplus.hardware.olc2-V2"
+          file="/system/system_ext/framework/vendor.oplus.hardware.olc2-V2-java.jar"/>
+</permissions>
+

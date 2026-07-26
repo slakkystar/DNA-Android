@@ -1,0 +1,17 @@
+#
+# Copyright (c) 2020-2021 OPLUS Technology(Shanghai) Corp., Ltd.
+# All Rights Reserved
+#
+
+service vendor.urcc-hal-aidl /odm/bin/hw/vendor.oplus.hardware.urcc-service
+    class hal
+    user root
+    group root readproc
+    group system
+
+on post-fs-data
+    mkdir /data/vendor/urcc 0777 system system
+    mkdir /data/vendor/uah 0777 system system
+
+on property:vendor.urcc.debug=1 
+    mkdir /data/vendor/urcc 0777 system system

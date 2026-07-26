@@ -1,0 +1,10 @@
+<!--
+Copyright (c) 2020-2021 OPLUS Technology(Shanghai) Corp., Ltd.
+All Rights Reserved
+-->
+<manifest version="1.0" type="device">
+    <hal format="aidl">
+        <name>vendor.oplus.hardware.urcc</name>
+        <fqname>IUrcc/default</fqname>
+    </hal>
+</manifest>

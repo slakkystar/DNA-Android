@@ -28,4 +28,13 @@
             "$START_DIR/samples/cos/extra_qcom.sh"
         </set>
     </action>
+
+    <action>
+        <title>MTK Extra Hals</title>
+        <desc>Additional hals for mediatek , for better optimization </desc>
+        <set>
+            chmod +x "$START_DIR/samples/cos/extra_mtk.sh"
+            "$START_DIR/samples/cos/extra_mtk.sh"
+        </set>
+    </action>
 </group>
