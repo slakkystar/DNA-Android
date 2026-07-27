@@ -91,28 +91,28 @@ jobs:
             --ks-pass pass:"$KEYSTORE_PASSWORD" \
             --key-pass pass:"$KEY_PASSWORD" \
             --ks-key-alias "$KEY_ALIAS" \
-            --out DNA-BETA-2.5.0-EN-signed.apk \
+            --out DNA-BETA-2.6.0-EN-signed.apk \
             pio-release_mini-aligned.apk
           rm -f release.keystore
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: dna-debug-2.5.0-apk
+          name: dna-debug-2.6.0-apk
           path: pio/build/outputs/apk/debug/*.apk
 
       - name: Upload release_mini APK (unsigned)
         uses: actions/upload-artifact@v4
         with:
-          name: DNA-BETA-2.5.0-EN-unsigned
+          name: DNA-BETA-2.6.0-EN-unsigned
           path: pio/build/outputs/apk/release_mini/*.apk
 
       - name: Upload signed release_mini APK
         if: steps.signing.outputs.enabled == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: DNA-BETA-2.5.0-EN
-          path: DNA-BETA-2.5.0-EN-signed.apk
+          name: DNA-BETA-2.6.0-EN
+          path: DNA-BETA-2.6.0-EN-signed.apk
 
       - name: Collect full build logs
         if: always()

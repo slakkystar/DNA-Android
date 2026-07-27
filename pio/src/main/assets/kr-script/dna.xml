@@ -188,7 +188,9 @@
         <param name="brze" required="true" value="3" label="BR compression level" desc="Note: the higher the value, the slower the packing process may be" type="seekbar" max="7" min="1"/>
         <param name="IMG" title="Select IMG file:" separator="," options-sh="samples/findfile.sh img" desc="Place your file in the project path /sdcard/DNA" required="true" multiple="true"/>              
     </action>
+</group>
 
+<group title="Additional features">
     <action>
         <title>Merge split img files into super.img</title>
     <set>
