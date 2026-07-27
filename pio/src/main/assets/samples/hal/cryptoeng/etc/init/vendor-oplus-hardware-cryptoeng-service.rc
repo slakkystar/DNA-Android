@@ -1,0 +1,26 @@
+##/*************************************************************
+## ** File: - vendor-oplus-hardware-cryptoeng-service.rc
+## ** OPLUS_FEATURE_CRYPTOENG
+## ** Copyright (C), 2026, OemPorts10T 
+## ** 
+## ** Description : 1.0
+## **           This is a common file 
+## ** 
+## ** Version: 1.0
+## ** Date created: 06:56, 2026/02/16
+## ** Author: dandagaharu77@gmail.com
+## ** 
+## ** ------------------ Revision History: ---------------------
+## **      <author>        <date>                    <desc>
+## **      Danda420        06:56, 2026/02/16         init
+## *************************************************************/
+
+on post-fs-data
+    mkdir /data/vendor_de/0/cryptoeng 0770 system system encryption=None
+
+service hal_cryptoeng_oplus /odm/bin/hw/vendor-oplus-hardware-cryptoeng-service
+    class hal
+    user system
+    group system input sdcard_rw sdcard_r readproc nfc
+    interface aidl vendor.oplus.hardware.cryptoeng.ICryptoeng/default
+

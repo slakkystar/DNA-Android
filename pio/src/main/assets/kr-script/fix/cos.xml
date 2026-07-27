@@ -37,4 +37,13 @@
             "$START_DIR/samples/cos/extra_mtk.sh"
         </set>
     </action>
+
+    <action>
+        <title>Cryptoeng HAL Fix</title>
+        <desc> Danda420 Privacy password fix with Cryptoeng Aidl hal </desc>
+        <set>
+            chmod +x "$START_DIR/samples/cos/cryptoeng.sh"
+            "$START_DIR/samples/cos/cryptoeng.sh"
+        </set>
+    </action>
 </group>
