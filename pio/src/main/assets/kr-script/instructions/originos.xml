@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<page>
+    <text>
+        <slice size="22" bold="true" break="true">Porting OriginOS</slice>
+        <slice break="true">The port is based on two firmware packages: the "base" (OriginOS — the source of the shell itself) and the "stock" firmware of the phone to which the port is being transferred.</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">Step 1. Unpacking the Base</slice>
+        <slice break="true">Unpack the payload.bin of the OriginOS base and extract the following partitions:</slice>
+        <slice break="true" bold="true">system, system_ext, product, dyn.img, oem.img, vgc.img</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">Step 2. Unpacking the Stock Firmware</slice>
+        <slice break="true">From the stock firmware of the phone to which you are porting, extract only:</slice>
+        <slice break="true" bold="true">system_ext</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">Step 3. Editing build.prop</slice>
+        <slice break="true">Open the file:</slice>
+        <slice break="true" bold="true">system/system/build.prop</slice>
+        <slice break="true">and add the following line to it:</slice>
+        <slice break="true" bold="true" color="#00ff00">persist.sys.disable_rescue=true</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">Step 4. Transferring .prop Files from vgc / oem / dyn</slice>
+        <slice break="true">Copy and paste the contents of the following files into system/system/build.prop:</slice>
+        <slice break="true" bold="true">port/vgc/vgc.prop</slice>
+        <slice break="true" bold="true">port/oem/oem.prop and port/oem/vendor.prop</slice>
+        <slice break="true" bold="true">port/dyn/dyn.prop</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">Step 5. Determining Android Version</slice>
+        <slice break="true">In the same build.prop, find the line:</slice>
+        <slice break="true" bold="true">ro.system.build.version.release=</slice>
+        <slice break="true">The value of this prop will show which Android version (A10–A16) you need to take phh_init for.</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">Step 6. Adding phh_init</slice>
+        <slice break="true">The phh_init files are located here:</slice>
+        <slice break="true" bold="true">/data/user/0/com.dna.tools/files/samples/phh_init/</slice>
+        <slice break="true">Inside are subfolders for each Android version: A10, A11, A12, A13, A14, A15, A16.</slice>
+        <slice break="true" color="#ff9500">Select the subfolder corresponding to the value of ro.system.build.version.release from Step 5, and transfer its contents to system/system/ of the port with file replacement.</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">Step 7. Transferring VNDK APEX</slice>
+        <slice break="true">Copy all vndk apex files from stock/system_ext/apex/ to port/system_ext/apex/.</slice>
+        <slice break="true">If such an apex is not yet present in OriginOS (e.g., vndk34 is missing) — copy it.</slice>
+        <slice break="true">If such an apex already exists — leave it untouched by default.</slice>
+        <slice break="true" color="#ff9500">Exception: if a bootloop occurs after building and flashing — try replacing the already existing apex with the version from stock, even if it was already there.</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">How to Build Properly</slice>
+        <slice break="true">It is recommended to build in erofs, raw format.</slice>
+        <slice break="true" bold="true">Build from OriginOS (base):</slice>
+        <slice break="true">system, product, system_ext</slice>
+        <slice break="true" bold="true">Build from stock firmware:</slice>
+        <slice break="true">vendor, odm, all **_dlkm (including system_dlkm)</slice>
+        <slice break="true" color="#ff9500">A vendor partition from any Android version is suitable for the port — to any Android version of the base.</slice>
+    </text>
+</page>

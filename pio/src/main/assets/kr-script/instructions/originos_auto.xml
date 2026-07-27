@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<page>
+    <text>
+        <slice size="22" bold="true" break="true">Automated OriginOS Port</slice>
+        <slice break="true">This guide describes the process of creating a port using the auto-script. The port is built on the basis of two firmware packages: the donor (OriginOS — the shell itself) and the stock firmware of the phone to which the port is being transferred.</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">Step 1. Preparing and Unpacking Firmware</slice>
+        <slice break="true">Unpack the payload.bin of both firmware packages. For the auto-script to work correctly, the project folders must be named strictly in a certain way:</slice>
+        <slice break="true" bold="true" color="#00ff00">Name the stock firmware project "stok" MANDATORILY</slice>
+        <slice break="true" bold="true" color="#00ff00">Name the donor project (OriginOS) "port" MANDATORILY</slice>
+        <slice break="true" bold="true">From the donor (into the port folder), extract the following partitions:</slice>
+        <slice break="true">system, system_ext, product, dyn.img, oem.img, vgc.img</slice>
+        <slice break="true" bold="true">From the stock firmware (into the stok folder), extract only:</slice>
+        <slice break="true">system_ext</slice>
+        <slice break="true">Don't forget to unpack the img/br files before running the script on both projects</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">Step 2. Running the Auto-script</slice>
+        <slice break="true">After unpacking, run the main auto-port script in the Auto Ports menu, it will notify you when the port is finished</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">Step 3. Proper Building</slice>
+        <slice break="true">After the script has successfully completed, you can proceed to building the images.</slice>
+        <slice break="true">It is recommended to build images in erofs, raw format.</slice>
+        <slice break="true" bold="true">Build from the donor folder (port):</slice>
+        <slice break="true">system, product, system_ext</slice>
+        <slice break="true" bold="true">Build from the stock folder (stok):</slice>
+        <slice break="true">vendor, odm, all **_dlkm (if present)</slice>
+    </text>
+
+    <text>
+        <slice size="20" bold="true" break="true">Step 4. Troubleshooting First Boot (bootloop)</slice>
+        <slice break="true" bold="true">If the device does not boot after building and flashing (bootloop):</slice>
+        <slice break="true">Try forcibly replacing the apex files in port/system_ext/apex/ with versions from the stok folder.</slice>
+        <slice break="true">After these actions, the firmware should boot.</slice>
+        <slice break="true" color="#ff9500">If the device still does not boot — try changing the OriginOS donor.</slice>
+    </text>
+</page>

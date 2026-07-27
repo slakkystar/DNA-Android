@@ -3,4 +3,6 @@
     <page title="ColorOS / OxygenOS / RealmeUI" config="kr-script/instructions/color.xml" />
     <page title="ColorOS / OxygenOS / RealmeUI (auto port)" config="kr-script/instructions/color_auto.xml" />
     <page title="HyperOS" config="kr-script/instructions/hyperos.xml" />
+    <page title="OriginOS" config="kr-script/instructions/originos.xml" />
+    <page title="OriginOS (auto port)" config="kr-script/instructions/originos_auto.xml" />
 </page>

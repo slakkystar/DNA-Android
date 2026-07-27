@@ -159,6 +159,14 @@
          "$START_DIR/samples/color_auto.sh"
         </set>
     </action>
+
+    <action>
+        <title>OriginOS auto port (read guide for more Info)</title>
+        <set>
+         chmod +x "$START_DIR/samples/originos_auto.sh"
+         "$START_DIR/samples/originos_auto.sh"
+        </set>
+    </action>
 </group>
 
 <group title="Format Conversion">
