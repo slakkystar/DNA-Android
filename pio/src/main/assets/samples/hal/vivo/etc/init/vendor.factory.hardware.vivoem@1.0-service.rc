@@ -1,0 +1,4 @@
+service vivoem-hal-1-0 /vendor/bin/hw/vendor.factory.hardware.vivoem@1.0-service
+    class hal
+    user root
+    group system radio audio

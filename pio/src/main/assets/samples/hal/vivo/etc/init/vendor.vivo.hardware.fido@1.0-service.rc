@@ -1,0 +1,4 @@
+service vendor.fido /vendor/bin/hw/vendor.vivo.hardware.fido@1.0-service
+    class hal
+    user system
+    group system

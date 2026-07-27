@@ -1,0 +1,325 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- Copyright (C) 2018 The Android Open Source Project
+     Licensed under the Apache License, Version 2.0 (the "License");
+     you may not use this file except in compliance with the License.
+     You may obtain a copy of the License at
+          http://www.apache.org/licenses/LICENSE-2.0
+     Unless required by applicable law or agreed to in writing, software
+     distributed under the License is distributed on an "AS IS" BASIS,
+     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+     See the License for the specific language governing permissions and
+     limitations under the License.
+-->
+<AnalysisRule version="1.0" xmlns:xi="http://www.w3.org/2001/XInclude">
+    <!-- Rule for fingerprint -->
+    <rules class="fingerprint" enabled="true">
+        <rule name="captureImage">
+            <events>
+                <event name="startCapture" flags="begin"/>
+                <event name="imageQuality" flags="optional"/>
+                <event name="imageCoverage" flags="optional"/>
+                <event name="verifyScore" flags="optional"/>
+                <event name="imageCaptured" flags="over"/>
+            </events>
+        </rule>
+
+        <rule name="authenticated" type="data">
+            <events>
+                <event name="touchDown" flags="begin"/>
+                <event name="shooterShown" flags="optional"/>
+                <event name="verifyRetry" flags="optional"/>
+                <event name="authenticatedTimeout" flags="cancelled|optional"/>
+                <event name="authenticated" flags="over"/>
+            </events>
+        </rule>
+
+        <rule name="showShooter" type="workflow">
+            <events>
+                <event name="touchDown"/>
+                <event name="shooterShown"/>
+            </events>
+        </rule>
+        <rule name="bigCollect" type="data">
+            <events>
+                <event name="quality" flags="begin"/>
+                <event name="coverage" flags="optional"/>
+                <event name="wait_hbm_time" flags="optional"/>
+                <event name="lcm_id" flags="optional"/>
+                <event name="auth_extra1" flags="optional"/>
+                <event name="auth_extra2" flags="optional"/>
+                <event name="auth_extra3" flags="optional"/>
+                <event name="auth_extra4" flags="optional"/>
+                <event name="auth_extra5" flags="optional"/>
+                <event name="auth_extra6" flags="optional"/>
+                <event name="auth_extra7" flags="optional"/>
+                <event name="auth_extra8" flags="optional"/>
+                <event name="auth_extra9" flags="optional"/>
+                <event name="auth_extra10" flags="optional"/>
+                <event name="wait_asf_hbm_time" flags="optional"/>
+                <event name="authentication_time" flags="optional"/>
+                <event name="auth_time" flags="optional"/>
+                <event name="score" flags="optional"/>
+                <event name="auth_extra1,auth_extra2,auth_extra3,auth_extra4,auth_extra5,auth_extra6,auth_extra7,auth_extra8,auth_extra9,auth_extra10" flags="optional"/>
+                <event name="broken,exp,core,fov,all,mean" flags="optional"/>
+                <event name="Egtype,Egstatus,ETcount,MTid,MFid,study,CFscore,FGscore,AR,CRangle,Cscore,AN,FQscore,FLivescore,FLightscore,FSscore,FStrscore,IBQI,Sid" flags="optional"/>
+                <event name="broken_check,film_check,exposure_time,rawdata,wait_hbm_time,auth_time,rawdata_max,template_update,base_update,base_used,template_area" flags="optional"/>
+                <event name="no_updateInfo,hpn_err0,hpn_err1,hpn_err2,base_count0,base_count1,base_count2,fake_status,fake_type,resid_status" flags="optional"/>
+                <event name="broken" flags="optional"/>
+                <event name="fd,md,cd,mdt,cdt" flags="optional"/>
+                <event name="temp,cg_snr,mlut,finger,mistouch,x1,y1,x2,y2,sbi,lpmm" flags="optional"/>
+                <event name="module_factory" flags="optional"/>
+                <event name="retry" flags="over"/>
+            </events>
+        </rule>
+
+        <rule name="cbgeData" type="data">
+            <events>
+                <event name="time" flags="begin"/>
+                <event name="screen" flags="optional"/>
+                <event name="regions" flags="optional"/>
+                <event name="res" flags="optional"/>
+                <event name="cur_flag1,temp1,proceeds1" flags="optional"/>
+                <event name="cur_flag2,temp2,proceeds2" flags="optional"/>
+                <event name="cur_flag3,temp3,proceeds3" flags="optional"/>
+                <event name="cur_flag4,temp4,proceeds4" flags="optional"/>
+                <event name="count" flags="over"/>
+            </events>
+        </rule>
+
+        <rule name="otherAppAuth" type="data">
+            <events>
+                <event name="package" flags="begin"/>
+                <event name="authResult" flags="optional"/>
+                <event name="provider" flags="optional"/>
+                <event name="acquice" flags="over"/>
+            </events>
+        </rule>
+
+        <rule name="fpTestAuth" type="data">
+            <events>
+                <event name="fpTestAuthBegin" flags="begin"/>
+                <event name="fpTestAuthFid" flags="optional"/>
+                <event name="fpTestAuthEnd" flags="over"/>
+            </events>
+        </rule>
+
+        <rule name="unlockScreenOff" type="performance">
+            <events>
+                <event name="fingerprintWake" flags="begin"/>
+                <event name="hideKeyguardByFingerprint"/>
+                <event name="requireShowShooter" flags="optional"/>
+                <event name="displayInit" flags="pairable"/>
+                <event name="shooterShown" flags="optional"/>
+                <event name="authenticated"/>
+                <event name="authenticatedTimeout" flags="cancelled|optional"/>
+                <event name="windowReady" flags="optional"/>
+                <event name="wakeUp" flags="pairable"/>
+                <event name="dismissColorFade" flags="optional"/>
+                <event name="setColorFadeLevel"/>
+                <event name="brightnessUpdate"/>
+                <event name="applyBrightness"/>
+                <event name="highlightMaskRemoved" flags="optional"/>
+                <event name="wakeUpIntercept" flags="cancelled|optional"/>
+                <event name="wakeUpHookCancelled" flags="cancelled|optional"/>
+                <event name="light" flags="pairable|over"/>
+            </events>
+        </rule>
+
+        <rule name="unlockScreenOffCapacitive" type="performance">
+            <events>
+                <event name="fingerprintWake" flags="begin"/>
+                <event name="plan" flags="optional"/>
+                <event name="hideKeyguardByFingerprint"/>
+                <event name="displayInit" flags="pairable"/>
+                <event name="authenticationSucceed" flags="required"/>
+                <event name="wakeUp" flags="pairable"/>
+                <event name="setColorFadeLevel"/>
+                <event name="applyBrightness"/>
+                <event name="light" flags="pairable|over"/>
+            </events>
+        </rule>
+        <rule name="unlockScreenOnCapacitive" type="performance">
+            <events>
+                <event name="acquiredFingerDown" flags="begin"/>
+                <event name="plan" flags="optional"/>
+                <event name="authenticationSucceed" flags="required"/>
+                <event name="notifyHideKeyguard" flags="pairable"/>
+                <event name="keyguardGoingAwayBegin"/>
+                <event name="keyguardGoingAwayEnd" flags="over"/>
+                <event name="onShowDesktop" flags="optional|over"/>
+            </events>
+        </rule>
+
+        <rule name="unlockScreenOffOptical" type="performance">
+            <events>
+                <event name="fingerprintWake" flags="begin"/>
+                <event name="requireShowShooter" flags="optional"/>
+                <event name="plan" flags="optional"/>
+                <event name="shooterShown" flags="optional"/>
+                <event name="autoBrightness" flags="optional"/>
+                <event name="authenticationSucceed"/>
+                <event name="hbm8"/>
+                <event name="removeAlpha"/>
+                <event name="skipBlackOverlay"/>
+                <event name="offShowDesktop" flags="optional"/>
+                <event name="offSpeedExit" flags="over"/>
+            </events>
+        </rule>
+
+        <rule name="unlockScreenOnOptical" type="performance">
+            <events>
+                <event name="down304" flags="begin"/>
+                <event name="requireShowShooter" flags="optional"/>
+                <event name="plan" flags="optional"/>
+                <event name="shooterShown" flags="optional"/>
+                <event name="authenticationSucceed"/>
+                <event name="notifyHideKeyguard" flags="pairable"/>
+                <event name="keyguardGoingAwayBegin"/>
+                <event name="keyguardGoingAwayEnd" flags="over"/>
+                <event name="onShowDesktop" flags="optional|over"/>
+            </events>
+        </rule>
+
+        <!-- unlock speed, details  -->
+        <rule name="unlockSpeedOpticalScreenOff" type="performance">
+            <events>
+                <event name="fingerprintWake" flags="begin"/>
+                <event name="appDown" flags="optional"/>
+                <event name="requireShowShooter" flags="pairable"/>
+                <event name="shooterShown" flags="pairable"/>
+                <event name="halShooter" flags="pairable"/>
+                <event name="captureImage1" flags="pairable"/>
+                <event name="preProcess1" flags="pairable"/>
+                <event name="halAuth1" flags="pairable"/>
+                <event name="captureImage2" flags="pairable"/>
+                <event name="preProcess2" flags="pairable"/>
+                <event name="halAuth2" flags="pairable"/>
+                <event name="notifyHalAuth" flags="optional"/>
+                <event name="speedRetry" flags="optional"/>
+                <event name="speedExp" flags="optional"/>
+                <event name="fraAuth" flags="optional"/>
+                <event name="authenticationSucceed" flags="optional"/>
+                <event name="notifyHideKeyguard" flags="pairable"/>
+                <event name="autoBrightness" flags="optional"/>
+                <event name="hbm8" flags="optional"/>
+                <event name="skipBlackOverlay" flags="pairable"/>
+                <event name="plan" flags="optional"/>
+                <event name="speedPkg" flags="optional"/>
+                <event name="unlockPkg" flags="optional"/>
+                <event name="lanAnim" flags="optional"/>
+                <event name="downMode" flags="pairable"/>
+                <event name="icShow" flags="optional"/>
+                <event name="google_reason" flags="optional"/>
+                <event name="finishDrawing" flags="pairable"/>
+                <event name="offShowDesktop" flags="optional"/>
+                <event name="appLight" flags="pairable"/>
+                <event name="fraLight" flags="pairable"/>
+                <event name="intercept" flags="optional"/>
+                <event name="offSpeedExit" flags="over"/>
+            </events>
+        </rule>
+        <rule name="unlockSpeedOpticalScreenOn" type="performance">
+            <events>
+                <event name="down304" flags="begin"/>
+                <event name="appDown" flags="optional"/>
+                <event name="requireShowShooter" flags="pairable"/>
+                <event name="shooterShown" flags="pairable"/>
+                <event name="halShooter" flags="pairable"/>
+                <event name="captureImage1" flags="pairable"/>
+                <event name="preProcess1" flags="pairable"/>
+                <event name="halAuth1" flags="pairable"/>
+                <event name="captureImage2" flags="pairable"/>
+                <event name="preProcess2" flags="pairable"/>
+                <event name="halAuth2" flags="pairable"/>
+                <event name="notifyHalAuth" flags="optional"/>
+                <event name="speedRetry" flags="optional"/>
+                <event name="speedExp" flags="optional"/>
+                <event name="fraAuth" flags="optional"/>
+                <event name="authenticationSucceed" flags="optional"/>
+                <event name="notifyHideKeyguard" flags="pairable"/>
+                <event name="keyguardShownFalse" flags="optional"/>
+                <event name="keyguardGoingAwayEnd" flags="optional"/>
+                <event name="plan" flags="optional"/>
+                <event name="speedPkg" flags="optional"/>
+                <event name="unlockPkg" flags="optional"/>
+                <event name="lanAnim" flags="optional"/>
+                <event name="google_reason" flags="optional"/>
+                <event name="reqSnapshot" flags="pairable"/>
+                <event name="showSnapshot" flags="pairable"/>
+                <event name="finishDrawing" flags="pairable"/>
+                <event name="onShowDesktop" flags="optional"/>
+                <event name="intercept" flags="optional"/>
+                <event name="onSpeedExit" flags="over"/>
+            </events>
+        </rule>
+
+        <rule name="unlockSpeedCapacitiveScreenOff" type="performance">
+            <events>
+                <event name="fingerprintWake" flags="begin"/>
+                <event name="displayInit" flags="pairable"/>
+                <event name="captureImage1" flags="pairable"/>
+                <event name="preProcess1" flags="pairable"/>
+                <event name="halAuth1" flags="pairable"/>
+                <event name="captureImage2" flags="pairable"/>
+                <event name="preProcess2" flags="pairable"/>
+                <event name="halAuth2" flags="pairable"/>
+                <event name="halAuth" flags="pairable"/>
+                <event name="notifyHalAuth" flags="optional"/>
+                <event name="fraAuth" flags="optional"/>
+                <event name="authenticationSucceed" flags="required"/>
+                <event name="notifyHideKeyguard" flags="pairable"/>
+                <event name="colorFade"/>
+                <event name="finishDrawing" flags="pairable"/>
+                <event name="light" flags="pairable"/>
+                <event name="speedRetry" flags="optional"/>
+                <event name="plan" flags="optional"/>
+                <event name="speedPkg" flags="optional"/>
+                <event name="unlockPkg" flags="optional"/>
+                <event name="lanAnim" flags="optional"/>
+                <event name="google_reason" flags="optional"/>
+                <event name="offSpeedExit" flags="over"/>
+            </events>
+        </rule>
+        <rule name="unlockSpeedCapacitiveScreenOn" type="performance">
+            <events>
+                <event name="halDown" flags="begin"/>
+                <event name="acquiredFingerDown" flags="pairable"/>
+                <event name="captureImage1" flags="pairable"/>
+                <event name="preProcess1" flags="pairable"/>
+                <event name="halAuth1" flags="pairable"/>
+                <event name="captureImage2" flags="pairable"/>
+                <event name="preProcess2" flags="pairable"/>
+                <event name="halAuth2" flags="pairable"/>
+                <event name="halAuth" flags="pairable"/>
+                <event name="notifyHalAuth" flags="optional"/>
+                <event name="fraAuth" flags="optional"/>
+                <event name="authenticationSucceed" flags="required"/>
+                <event name="notifyHideKeyguard" flags="pairable"/>
+                <event name="keyguardGoingAwayEnd" flags="optional"/>
+                <event name="reqSnapshot" flags="pairable"/>
+                <event name="showSnapshot" flags="pairable"/>
+                <event name="finishDrawing" flags="pairable"/>
+                <event name="speedRetry" flags="optional"/>
+                <event name="plan" flags="optional"/>
+                <event name="speedPkg" flags="optional"/>
+                <event name="unlockPkg" flags="optional"/>
+                <event name="lanAnim" flags="optional"/>
+                <event name="google_reason" flags="optional"/>
+                <event name="onSpeedExit" flags="over"/>
+            </events>
+        </rule>
+        <rule name="errorInfo" type="data">
+            <events>
+                <event name="error_info" flags="begin"/>
+                <event name="common_extra" flags="over"/>
+            </events>
+        </rule>
+        <rule name="abnormalInfo" type="data">
+            <events>
+                <event name="halTime" flags="begin"/>
+                <event name="sendInfo" flags="over"/>
+            </events>
+        </rule>
+    </rules>
+    <!--xi:include href="analysis_rule_sub.xml"/-->
+</AnalysisRule>

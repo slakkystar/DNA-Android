@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<resource dir="file:///android_asset/samples" />
+
+<group title="HAL fixes">
+    <action>
+        <title>additional basic HALs for OriginOS</title>
+        <set>
+            chmod +x "$START_DIR/samples/fix/vivo.sh"
+            "$START_DIR/samples/fix/vivo.sh"
+        </set>
+    </action>
+</group>

@@ -1,0 +1,3 @@
+#!/system/bin/sh
+
+/vendor/bin/hw/vendor.vivo.hardware.vgnss@1.0-service

@@ -1,0 +1,4 @@
+service vcode-hal-1-0 /vendor/bin/hw/vendor.vivo.hardware.vcode@1.0-service
+    class hal
+    user system
+    group system

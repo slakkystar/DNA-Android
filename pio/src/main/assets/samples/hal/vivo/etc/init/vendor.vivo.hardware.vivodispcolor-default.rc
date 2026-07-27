@@ -1,0 +1,5 @@
+service vendor.vivodispcolor-default /vendor/bin/hw/vendor.vivo.hardware.vivodispcolor-service
+    class hal
+    user system
+    group system
+    shutdown critical

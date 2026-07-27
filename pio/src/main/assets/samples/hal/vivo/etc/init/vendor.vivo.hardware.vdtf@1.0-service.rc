@@ -1,0 +1,4 @@
+service vivo-vdtf-hal-1-0 /vendor/bin/hw/vendor.vivo.hardware.vdtf@1.0-service
+    class hal
+    user system
+    group system

@@ -1,0 +1,4 @@
+service vivo-sensorfactory-aidl /vendor/bin/hw/vendor.vivo.hardware.sensorfactory-service
+	class hal
+	user system
+	group system

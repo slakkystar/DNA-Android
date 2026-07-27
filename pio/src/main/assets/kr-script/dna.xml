@@ -11,6 +11,7 @@
 
 <group title="Fixes for ROMs">
     <page title="ColorOS Fixes" config="file:///android_asset/kr-script/fix/cos.xml" />
+    <page title="OriginOS Fixes" config="file:///android_asset/kr-script/fix/origin.xml" />
 </group>
 
 <group title="Unpack Menu">

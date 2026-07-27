@@ -1,0 +1,7 @@
+service digitalkey-1-0 /vendor/bin/hw/vendor.vivo.hardware.digitalkey@1.0-service
+    interface vendor.vivo.hardware.digitalkey@1.0::IDigitalkey default
+    class hal
+    oneshot
+    disabled
+    user  system
+    group system

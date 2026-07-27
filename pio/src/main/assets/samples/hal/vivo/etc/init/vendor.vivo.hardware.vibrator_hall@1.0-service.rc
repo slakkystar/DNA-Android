@@ -1,0 +1,4 @@
+service vivo-vibrator_hall-hal-1-0 /vendor/bin/hw/vendor.vivo.hardware.vibrator_hall@1.0-service
+	class hal
+	user system
+	group system

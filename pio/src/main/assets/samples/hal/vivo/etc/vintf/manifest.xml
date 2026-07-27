@@ -1,0 +1,186 @@
+<!-- Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
+-->
+<manifest version="1.0" type="device">
+    <hal format="hidl">
+        <name>vendor.nxp.nxpnfc@2.0::INxpNfc/default</name>
+        <transport>hwbinder</transport>
+        <version>2.0</version>
+    </hal>
+    <hal format="hidl">
+        <name>vendor.nxp.nxpnfc</name>
+        <transport>hwbinder</transport>
+        <version>2.0</version>
+        <interface>
+            <name>INxpNfc</name>
+            <instance>default</instance>
+        </interface>
+        <fqname>@2.0::INxpNfc/default</fqname>
+    </hal>
+	<hal format="hidl">
+        <name>android.hardware.nfc</name>
+        <transport>hwbinder</transport>
+        <version>1.2</version>
+        <interface>
+            <name>INfc</name>
+            <instance>default</instance>
+        </interface>
+        <fqname>@1.2::INfc/default</fqname>
+    </hal>
+	<hal format="hidl">
+        <name>android.hardware.secure_element</name>
+        <transport>hwbinder</transport>
+        <version>1.2</version>
+        <interface>
+            <name>ISecureElement</name>
+            <instance>SIM1</instance>
+            <instance>eSE1</instance>
+        </interface>
+        <fqname>@1.2::ISecureElement/SIM1</fqname>
+        <fqname>@1.2::ISecureElement/eSE1</fqname>
+    </hal>
+	<hal format="hidl">
+        <name>vendor.qti.esepowermanager</name>
+        <transport>hwbinder</transport>
+        <version>1.1</version>
+        <interface>
+            <name>IEsePowerManager</name>
+            <instance>default</instance>
+        </interface>
+        <fqname>@1.1::IEsePowerManager/default</fqname>
+    </hal>
+    <hal format="hidl">
+        <name>vendor.factory.hardware.vivoem</name>
+        <transport>hwbinder</transport>
+        <version>1.0</version>
+        <interface>
+            <name>IVivoEm</name>
+            <instance>default</instance>
+        </interface>
+        <fqname>@1.0::IVivoEm/default</fqname>
+    </hal>
+    <hal format="hidl">
+        <name>vendor.vivo.hardware.bbkts</name>
+        <transport>hwbinder</transport>
+        <version>1.0</version>
+        <interface>
+            <name>IBbkts</name>
+            <instance>default</instance>
+        </interface>
+        <fqname>@1.0::IBbkts/default</fqname>
+    </hal>
+    <hal format="hidl">
+        <name>vendor.vivo.hardware.biometrics.analysis</name>
+        <transport>hwbinder</transport>
+        <version>1.1</version>
+        <interface>
+            <name>IAnalysis</name>
+            <instance>default</instance>
+        </interface>
+        <fqname>@1.1::IAnalysis/default</fqname>
+    </hal>
+    <hal format="hidl">
+        <name>vendor.vivo.hardware.biometrics.face</name>
+        <transport>hwbinder</transport>
+        <version>2.0</version>
+        <interface>
+            <name>IBiometricsFace</name>
+            <instance>default</instance>
+        </interface>
+        <fqname>@2.0::IBiometricsFace/default</fqname>
+    </hal>
+    <hal format="hidl">
+        <name>vendor.vivo.hardware.capacity_key</name>
+        <transport>hwbinder</transport>
+        <version>1.0</version>
+        <interface>
+            <name>ICapacityKey</name>
+            <instance>default</instance>
+        </interface>
+        <fqname>@1.0::ICapacityKey/default</fqname>
+    </hal>
+    <hal format="hidl">
+        <name>vendor.vivo.hardware.configstore</name>
+        <transport>hwbinder</transport>
+        <version>1.0</version>
+        <interface>
+            <name>IVivoConfigStore</name>
+            <instance>default</instance>
+        </interface>
+        <fqname>@1.0::IVivoConfigStore/default</fqname>
+    </hal>
+    <hal format="hidl">
+        <name>vendor.vivo.hardware.sectee</name>
+        <transport>hwbinder</transport>
+        <version>1.0</version>
+        <interface>
+            <name>ISecTee</name>
+            <instance>default</instance>
+        </interface>
+        <fqname>@1.0::ISecTee/default</fqname>
+    </hal>
+    <hal format="hidl">
+        <name>vendor.vivo.hardware.tam</name>
+        <transport>hwbinder</transport>
+        <version>1.0</version>
+        <interface>
+            <name>ITamNative</name>
+            <instance>default</instance>
+        </interface>
+        <fqname>@1.0::ITamNative/default</fqname>
+    </hal>
+	<hal format="hidl">
+        <name>vendor.vivo.hardware.vcode</name>
+        <transport>hwbinder</transport>
+        <version>1.0</version>
+        <interface>
+            <name>IEventTransfer</name>
+            <instance>default</instance>
+        </interface>
+        <interface>
+            <name>IVcode</name>
+            <instance>default</instance>
+        </interface>
+        <fqname>@1.0::IEventTransfer/default</fqname>
+        <fqname>@1.0::IVcode/default</fqname>
+    </hal>
+    <hal format="hidl">
+        <name>vendor.vivo.hardware.vdtf</name>
+        <transport>hwbinder</transport>
+        <version>1.0</version>
+        <interface>
+            <name>IVdtf</name>
+            <instance>default</instance>
+        </interface>
+        <fqname>@1.0::IVdtf/default</fqname>
+    </hal>
+    <hal format="hidl">
+        <name>vendor.vivo.hardware.vibrator_hall</name>
+        <transport>hwbinder</transport>
+        <version>1.0</version>
+        <interface>
+            <name>IVib_Hall</name>
+            <instance>default</instance>
+        </interface>
+        <fqname>@1.0::IVib_Hall/default</fqname>
+    </hal>
+    <hal format="hidl">
+        <name>vendor.vivo.hardware.vperf</name>
+        <transport>hwbinder</transport>
+        <version>1.0</version>
+        <interface>
+            <name>IVPerf</name>
+            <instance>default</instance>
+        </interface>
+        <fqname>@1.0::IVPerf/default</fqname>
+    </hal>
+	<hal format="hidl">
+        <name>vendor.vivo.hardware.vgnss</name>
+        <transport>hwbinder</transport>
+        <version>1.0</version>
+        <interface>
+            <name>IVgnss</name>
+            <instance>default</instance>
+        </interface>
+        <fqname>@1.0::IVgnss/default</fqname>
+    </hal>
+</manifest>

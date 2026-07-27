@@ -1,0 +1,5 @@
+service vivo-configstore-hal-1-0 /vendor/bin/hw/vendor.vivo.hardware.configstore@1.0-service
+    class hal
+    user system
+    group system
+    onrestart setprop vendor.vivoconfigstore.ready false

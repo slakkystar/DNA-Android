@@ -1,0 +1,28 @@
+# Cust
+on fs
+    mount ext4 /dev/block/bootdevice/by-name/cust /oem
+# Selinux and misc       
+on boot
+    chmod 0640 /sys/fs/selinux/enforce
+    chmod 0440 /sys/fs/selinux/policy
+    chown system system /sys/touchpanel/double_tap
+    chmod 0660 /sys/touchpanel/double_tap
+#DT2W
+on property:persist.sys.dt2w_enable=1
+    write /sys/touchpanel/double_tap 1
+# Vivo Hals
+on boot
+    exec_background u:object_r:system_file:s0 root root -- /vendor/vivo/bbkts
+	exec_background u:object_r:system_file:s0 root root -- /vendor/vivo/capacity_key
+    exec_background u:object_r:system_file:s0 root root -- /vendor/vivo/configstore
+	exec_background u:object_r:system_file:s0 root root -- /vendor/vivo/digitalkey
+	exec_background u:object_r:system_file:s0 root root -- /vendor/vivo/nfc_
+	exec_background u:object_r:system_file:s0 root root -- /vendor/vivo/sectee
+	exec_background u:object_r:system_file:s0 root root -- /vendor/vivo/secure
+	exec_background u:object_r:system_file:s0 root root -- /vendor/vivo/tam
+	exec_background u:object_r:system_file:s0 root root -- /vendor/vivo/trust
+	exec_background u:object_r:system_file:s0 root root -- /vendor/vivo/urus
+    exec_background u:object_r:system_file:s0 root root -- /vendor/vivo/vcode
+	exec_background u:object_r:system_file:s0 root root -- /vendor/vivo/vcustom
+    exec_background u:object_r:system_file:s0 root root -- /vendor/vivo/vdtf
+	exec_background u:object_r:system_file:s0 root root -- /vendor/vivo/vgnss

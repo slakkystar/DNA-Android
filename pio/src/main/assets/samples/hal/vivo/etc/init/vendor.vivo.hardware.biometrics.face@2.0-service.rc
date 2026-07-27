@@ -1,0 +1,10 @@
+on post-fs-data
+    mkdir /data/vendor/faceunlock 0775
+    chown system system /data/vendor/faceunlock
+on property:vendor.face.biometrics=1
+    restart biometrics-face
+    setprop vendor.face.biometrics 0
+service biometrics-face /vendor/bin/hw/vendor.vivo.hardware.biometrics.face@2.0-service
+    class late_start
+    user system
+    group system sdcard_rw

@@ -1,0 +1,4 @@
+service vivo-bbklog-hal-1-0 /vendor/bin/hw/vendor.vivo.hardware.bbklog@1.0-service
+    class hal
+    user root
+    group system

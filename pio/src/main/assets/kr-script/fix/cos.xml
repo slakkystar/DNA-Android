@@ -6,8 +6,8 @@
         <title>Power button delay fix</title>
         <desc>will completely add OPlus HAL under the name "stability"</desc>
         <set>
-            chmod +x "$START_DIR/samples/cos/stability.sh"
-            "$START_DIR/samples/cos/stability.sh"
+            chmod +x "$START_DIR/samples/fix/stability.sh"
+            "$START_DIR/samples/fix/stability.sh"
         </set>
     </action>
 
@@ -15,8 +15,8 @@
         <title>Charging HAL Fix</title>
         <desc>Automatic detection of SOC/version and installation of the required charger HAL in odm/vendor-odm</desc>
         <set>
-            chmod +x "$START_DIR/samples/cos/charger.sh"
-            "$START_DIR/samples/cos/charger.sh"
+            chmod +x "$START_DIR/samples/fix/charger.sh"
+            "$START_DIR/samples/fix/charger.sh"
         </set>
     </action>
 
@@ -24,8 +24,8 @@
         <title>QCOM Extra Hals</title>
         <desc>Additional hals for qcom , for better optimization </desc>
         <set>
-            chmod +x "$START_DIR/samples/cos/extra_qcom.sh"
-            "$START_DIR/samples/cos/extra_qcom.sh"
+            chmod +x "$START_DIR/samples/fix/extra_qcom.sh"
+            "$START_DIR/samples/fix/extra_qcom.sh"
         </set>
     </action>
 
@@ -33,8 +33,8 @@
         <title>MTK Extra Hals</title>
         <desc>Additional hals for mediatek , for better optimization </desc>
         <set>
-            chmod +x "$START_DIR/samples/cos/extra_mtk.sh"
-            "$START_DIR/samples/cos/extra_mtk.sh"
+            chmod +x "$START_DIR/samples/fix/extra_mtk.sh"
+            "$START_DIR/samples/fix/extra_mtk.sh"
         </set>
     </action>
 
@@ -42,8 +42,8 @@
         <title>Cryptoeng HAL Fix</title>
         <desc> Danda420 Privacy password fix with Cryptoeng Aidl hal </desc>
         <set>
-            chmod +x "$START_DIR/samples/cos/cryptoeng.sh"
-            "$START_DIR/samples/cos/cryptoeng.sh"
+            chmod +x "$START_DIR/samples/fix/cryptoeng.sh"
+            "$START_DIR/samples/fix/cryptoeng.sh"
         </set>
     </action>
 </group>

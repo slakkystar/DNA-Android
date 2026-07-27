@@ -1,0 +1,4 @@
+service tam-1-0 /vendor/bin/hw/vendor.vivo.hardware.tam@1.0-service
+	class main
+	user  system
+	group system
