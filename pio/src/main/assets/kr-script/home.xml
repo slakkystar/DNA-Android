@@ -20,9 +20,10 @@
            <param name="T" placeholder="Enter project name (do not use Chinese characters):" required="true"/>
     </action>
     
-    <action>
+    <action reload="true" auto-off="true">
            <title>Clear Project</title>
            <set>samples/project.sh RM</set>
+           <param name="O" placeholder="ARE YOU SURE? (write Yes, if it is so)" required="true"/>
     </action>
 
     <page title="Project Menu" config="file:///android_asset/kr-script/dna.xml">

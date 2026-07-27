@@ -40,13 +40,17 @@ done
 }
 #Clear project
 RM () {
-if [ -d $DNA_DRO ]; then
-  project=$(cat $TMPDIR/DNA.ini)
-  echo "> Clearing $project!"
-  rm -rf $DNA_DRO/*
-  echo "> $project cleared"
+if [ "$O" = "Yes" ]; then
+    if [ -d "$DNA_DRO" ]; then
+      project=$(cat "$TMPDIR/DNA.ini" 2>/dev/null)
+      echo "> Clearing $project!"
+      rm -rf "$DNA_DRO"/*
+      echo "> $project cleared"
+    else
+      echo "> $DNA_DRO not found"
+    fi
 else
-  echo "> $DNA_DRO not found"
+    echo "> canceling the clear"
 fi
 }
 
