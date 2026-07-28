@@ -285,4 +285,21 @@
          "$START_DIR/samples/set_permissive.sh"
         </set>
     </action>
+
+    <action>
+        <title>Add phh_init to system</title>
+        <set>
+         chmod +x "$START_DIR/samples/phh.sh"
+         "$START_DIR/samples/phh.sh"
+        </set>
+        <param name="A" title="Select Android Version" type="select" >
+            <option value="10"> Android 10 </option>
+            <option value="11"> Android 11 </option>
+            <option value="12"> Android 12</option>
+            <option value="13"> Android 13 </option>
+            <option value="14"> Android 14 </option>
+            <option value="15"> Android 15 </option>
+            <option value="16"> Android 16</option>
+        </param>
+    </action>
 </group>
