@@ -23,9 +23,9 @@ else
   export DNA_TMP=$({START_DIR})/DNA
 fi
 if [ -f $TMPDIR/DNA.ini ]; then
-  project=$(cat $TMPDIR/DNA.ini)
-  export DNA_PRO=$DNA_DIR/$project
-  export DNA_DRO=$DNA_TMP/$project
+  export dna_project=$(cat $TMPDIR/DNA.ini)
+  export DNA_PRO=$DNA_DIR/$dna_project
+  export DNA_DRO=$DNA_TMP/$dna_project
 fi
 chown -R $APP_USER_ID:$APP_USER_ID $START_DIR
 # Run script

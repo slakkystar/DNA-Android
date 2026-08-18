@@ -40,12 +40,15 @@ done
 }
 #Clear project
 RM () {
-if [ "$O" = "Yes" ]; then
+if [ "$O" = "Yes" ] || [ "$O" = "YES" ] || [ "$O" = "yes" ]; then
+    if [ -z "$DNA_DRO" ]; then
+        echo "> Error: project is empty!"
+        return 1
+    fi
     if [ -d "$DNA_DRO" ]; then
-      project=$(cat "$TMPDIR/DNA.ini" 2>/dev/null)
-      echo "> Clearing $project!"
-      rm -rf "$DNA_DRO"/*
-      echo "> $project cleared"
+      echo "> Clearing $dna_project!"
+      rm -rf "$DNA_DRO"
+      echo "> $dna_project cleared"
     else
       echo "> $DNA_DRO not found"
     fi
