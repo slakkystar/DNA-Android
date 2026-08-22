@@ -302,4 +302,21 @@
             <option value="16"> Android 16</option>
         </param>
     </action>
+
+    <action>
+        <title>Convert NonDynamics partitions to Dynamics</title>
+        <desc>Convert NON-Dynamic partition to Dynamic
+        Note: You need to change the fstab yourself for each section</desc>
+        <set>
+         chmod +x "$START_DIR/samples/dynamic.sh"
+         "$START_DIR/samples/dynamic.sh"
+        </set>
+        <param name="type_select" title="Select partition for convert"
+               type="select">
+            <option value="all"> All </option>
+            <option value="odm"> odm </option>
+            <option value="product"> product </option>
+            <option value="system_ext"> system_ext </option>
+        </param>
+    </action>
 </group>
