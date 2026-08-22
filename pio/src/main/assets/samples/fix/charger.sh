@@ -1,4 +1,4 @@
-stok="$DNA_TMP/DNA_stok"
+stok="$DNA_DRO"
 base_src="$START_DIR/samples/hal/charger"
 
 echo "=== Charging HAL Fix ==="

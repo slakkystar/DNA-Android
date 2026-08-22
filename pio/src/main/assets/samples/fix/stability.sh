@@ -1,4 +1,4 @@
-stok="$DNA_TMP/DNA_stok"
+stok="$DNA_DRO"
 src="$START_DIR/samples/hal/stability"
 
 echo "=== PowerButton Delay Fix Started ==="

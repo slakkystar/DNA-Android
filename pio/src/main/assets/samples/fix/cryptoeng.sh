@@ -1,4 +1,4 @@
-stok="$DNA_TMP/DNA_stok"
+stok="$DNA_DRO"
 src="$START_DIR/samples/hal/cryptoeng"
 enable_prop="ro.oemports10t.cryptoeng=true"
 

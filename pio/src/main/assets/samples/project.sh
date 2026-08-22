@@ -47,7 +47,7 @@ if [ "$O" = "Yes" ] || [ "$O" = "YES" ] || [ "$O" = "yes" ]; then
     fi
     if [ -d "$DNA_DRO" ]; then
       echo "> Clearing $dna_project!"
-      rm -rf "$DNA_DRO"
+      rm -rf "$DNA_DRO"/*
       echo "> $dna_project cleared"
     else
       echo "> $DNA_DRO not found"
