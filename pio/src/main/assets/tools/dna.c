@@ -17,7 +17,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 
-#define VERSION "0.2"
+#define VERSION "0.2.7"
 
 /* ---------- format detection ---------- */
 
@@ -175,7 +175,6 @@ static int lp_load(img_t *im, lp_t *lp) {
 
 static int in_list(const char *list, const char *name) {
     if (!list || !*list) return 1;                          /* empty = all */
-    if (!strcmp(list, "@a")) { size_t l = strlen(name); return !(l > 2 && !strcmp(name + l - 2, "_b")); }
     size_t n = strlen(name);
     for (const char *s = list; *s; ) {
         const char *e = strchr(s, ','); size_t l = e ? (size_t)(e - s) : strlen(s);
@@ -193,23 +192,41 @@ static int flag_val(int argc, char **argv, int *i) {
     return 1;
 }
 
+/* Slot handling. mode: "none" (default) = slot-a/unsuffixed partitions, suffix stripped (system_a -> system);
+ * "a" / "b" = only that slot, suffix stripped; "both" = every partition, names kept as in the super.
+ * Returns 1 if the partition is included and writes the output name into out. */
+static int slot_pick(const char *mode, const char *name, char *out, size_t n) {
+    size_t l = strlen(name);
+    int sa = l > 2 && !strcmp(name + l - 2, "_a"), sb = l > 2 && !strcmp(name + l - 2, "_b");
+    snprintf(out, n, "%s", name);
+    if (!strcmp(mode, "both")) return 1;
+    if (!sa && !sb) return 1;                                  /* slot-less partition */
+    if (!strcmp(mode, "b") ? !sb : !sa) return 0;              /* "none" and "a" take slot a */
+    out[l - 2] = 0;
+    return 1;
+}
+
 static int cmd_lpunpack(int argc, char **argv) {
     const char *parts = NULL, *file = NULL;
-    int list = 0, del = 0, autox = 0;
+    int list = 0, del = 0, autox = 0; const char *slot = "none";
     for (int i = 0; i < argc; i++) {
         if (!strcmp(argv[i], "--list")) list = 1;
         else if (!strcmp(argv[i], "--partition") && i + 1 < argc) parts = argv[++i];
+        else if (!strcmp(argv[i], "--slot") && i + 1 < argc) slot = argv[++i];
         else if (!strcmp(argv[i], "--delete")) del = flag_val(argc, argv, &i);
         else if (!strcmp(argv[i], "--auto")) autox = flag_val(argc, argv, &i);
         else if (argv[i][0] != '-') file = argv[i];
     }
-    if (!file) { fprintf(stderr, "usage: dna lpunpack [--list] [--partition a,b] [--delete 0|1] [--auto 0|1] super.img\n"); return 2; }
+    if (strcmp(slot, "none") && strcmp(slot, "a") && strcmp(slot, "b") && strcmp(slot, "both")) {
+        fprintf(stderr, "> Error: --slot must be none, a, b or both\n"); return 2;
+    }
+    if (!file) { fprintf(stderr, "usage: dna lpunpack [--list] [--slot none|a|b|both] [--partition a,b] [--delete 0|1] [--auto 0|1] super.img\n"); return 2; }
 
     img_t im; lp_t lp;
     if (img_open(&im, file) || lp_load(&im, &lp)) { fprintf(stderr, "> Error: %s is not a valid super image\n", file); img_close(&im); return 1; }
 
     if (list) {
-        for (size_t i = 0; i < lp.np; i++) if (lp.p[i].sectors) puts(lp.p[i].name);
+        for (size_t i = 0; i < lp.np; i++) { char dn[64]; if (lp.p[i].sectors && slot_pick(slot, lp.p[i].name, dn, sizeof dn)) puts(dn); }
         img_close(&im); return 0;
     }
 
@@ -220,9 +237,10 @@ static int cmd_lpunpack(int argc, char **argv) {
     uint8_t *buf = malloc(1 << 20);
     for (size_t i = 0; i < lp.np; i++) {
         part_t *p = &lp.p[i];
-        if (!p->sectors || !in_list(parts, p->name)) continue;
-        char out[4400]; snprintf(out, sizeof out, "%s/%s.img", dir, p->name);
-        printf("> Extracting: %s\n", p->name); fflush(stdout);
+        char dn[64];
+        if (!p->sectors || !slot_pick(slot, p->name, dn, sizeof dn) || !in_list(parts, dn)) continue;
+        char out[4400]; snprintf(out, sizeof out, "%s/%s.img", dir, dn);
+        printf("> Extracting: %s\n", dn); fflush(stdout);
         FILE *o = fopen(out, "wb");
         if (!o) { fprintf(stderr, "> Error: cannot write %s\n", out); rc = 1; continue; }
         for (uint32_t j = 0; j < p->num_ext && !rc; j++) {
@@ -538,6 +556,11 @@ static int extract_ext(const char *img, const char *dro, const char *pname) {
                 e.bs, (unsigned long long)e.nblocks, e.isz, le32(sb), uu, pname);
         fclose(o);
     }
+    {   /* <name>_info: original image size in bytes (used by the "Original size" repack mode) */
+        char p4[4400]; snprintf(p4, sizeof p4, "%s/%s_info", cdir, pname);
+        FILE *fi = fopen(p4, "wb");
+        if (fi) { fprintf(fi, "%llu\n", (unsigned long long)(e.nblocks * e.bs)); fclose(fi); }
+    }
     printf("> Extracted %llu entries to %s\n", (unsigned long long)e.nfiles, e.outroot);
     for (size_t i = 0; i < e.nseen; i++) free(e.seen_path[i]);
     free(e.seen_ino); free(e.seen_path); free(e.gdt); img_close(&im);
@@ -659,10 +682,10 @@ static int extract_one(const char *path, int *deleted_src) {
     }
 
     const char *t = detect_type(full);
-    if (!strcmp(t, "super")) return cmd_lpunpack(3, (char *[]){ "--partition", "@a", full, NULL });
+    if (!strcmp(t, "super")) return cmd_lpunpack(1, (char *[]){ full, NULL });
     if (!strcmp(t, "sparse")) {
         { img_t pi; lp_t pl; int is_super = !img_open(&pi, full) && !lp_load(&pi, &pl); img_close(&pi);
-          if (is_super) return cmd_lpunpack(3, (char *[]){ "--partition", "@a", full, NULL }); }
+          if (is_super) return cmd_lpunpack(1, (char *[]){ full, NULL }); }
         char raw[4400]; snprintf(raw, sizeof raw, "%s/dna_%d_%s.raw", tmp_dir(), (int)getpid(), name);
         printf("> Converting sparse to raw: %s\n", name); fflush(stdout);
         if (sparse_to_raw(full, raw)) { fprintf(stderr, "> Error: sparse conversion failed\n"); return 1; }
