@@ -17,7 +17,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 
-#define VERSION "0.2.7"
+#define VERSION "0.3.5"
 
 /* ---------- format detection ---------- */
 
@@ -612,6 +612,17 @@ static int dat_to_img(const char *dat, char *outimg, size_t on) {
 
 static int extract_one(const char *path, int *deleted_src);
 
+static int copy_file(const char *src, const char *dst) {
+    FILE *a = fopen(src, "rb"); if (!a) return -1;
+    FILE *b = fopen(dst, "wb"); if (!b) { fclose(a); return -1; }
+    char *buf = malloc(1 << 20); size_t n; int rc = 0;
+    while ((n = fread(buf, 1, 1 << 20, a)) > 0) if (fwrite(buf, 1, n, b) != n) { rc = -1; break; }
+    free(buf); fclose(a);
+    if (fclose(b)) rc = -1;
+    if (rc) remove(dst);
+    return rc;
+}
+
 static int extract_raw_by_type(const char *img, const char *name, const char *pname, const char *dro) {
     const char *t = detect_type(img);
     char dest[4400];
@@ -648,6 +659,11 @@ static int extract_raw_by_type(const char *img, const char *name, const char *pn
         char *a[] = { "magiskboot", "unpack", "-h", abs, NULL };
         int rc = run(a);
         if (chdir(cwd0)) return -1;
+        if (!rc) {   /* keep the original next to the unpacked parts: repack needs it */
+            char keep[4700]; snprintf(keep, sizeof keep, "%s/%s.img", dest, pname);
+            if (copy_file(abs, keep)) fprintf(stderr, "> Warning: cannot save original image to %s\n", keep);
+            else printf("> Original saved: %s\n", keep);
+        }
         return rc;
     }
     fprintf(stderr, "> Unsupported image type '%s': %s\n", t, name);
@@ -722,6 +738,317 @@ static int cmd_extract(int argc, char **argv) {
     return any && !fail ? 0 : 1;
 }
 
+
+/* ---------- native raw -> sparse writer ---------- */
+
+static int sp_flush(FILE *in, FILE *o, uint64_t start, uint64_t len, int zero, uint32_t *nchunks) {
+    if (!len) return 0;
+    const uint32_t bs = 4096;
+    uint8_t ch[12] = {0xC1, 0xCA};
+    if (zero) ch[0] = 0xC3;
+    uint32_t n = (uint32_t)len, tot = 12 + (zero ? 0 : n * bs);
+    memcpy(ch + 4, &n, 4); memcpy(ch + 8, &tot, 4);
+    if (fwrite(ch, 1, 12, o) != 12) return -1;
+    if (!zero) {
+        uint8_t *buf = malloc(bs);
+        for (uint64_t i = 0; i < len; i++) {
+            memset(buf, 0, bs);
+            if (fseeko(in, (off_t)((start + i) * bs), SEEK_SET) != 0) { free(buf); return -1; }
+            size_t got = fread(buf, 1, bs, in);       /* short last block stays zero-padded */
+            (void)got;
+            if (fwrite(buf, 1, bs, o) != bs) { free(buf); return -1; }
+        }
+        free(buf);
+    }
+    (*nchunks)++;
+    return 0;
+}
+
+static int raw_to_sparse(const char *src, const char *dst) {
+    FILE *in = fopen(src, "rb"); if (!in) return -1;
+    fseeko(in, 0, SEEK_END); uint64_t size = (uint64_t)ftello(in); rewind(in);
+    const uint32_t bs = 4096; uint64_t nblk = (size + bs - 1) / bs;
+    FILE *o = fopen(dst, "wb"); if (!o) { fclose(in); return -1; }
+    uint8_t hdr[28] = {0};
+    int rc = fwrite(hdr, 1, 28, o) == 28 ? 0 : -1;      /* placeholder, rewritten at the end */
+    uint8_t *blk = malloc(bs), *zero = calloc(1, bs);
+    uint32_t nchunks = 0; uint64_t run_start = 0, run_len = 0; int run_zero = -1;
+    for (uint64_t b = 0; b < nblk && !rc; b++) {
+        memset(blk, 0, bs);
+        size_t got = fread(blk, 1, bs, in); (void)got;
+        int z = !memcmp(blk, zero, bs);
+        if (z != run_zero || run_len >= 0x7FFFFFF) {
+            rc = sp_flush(in, o, run_start, run_len, run_zero, &nchunks);
+            fseeko(in, (off_t)((b + 1) * bs), SEEK_SET);   /* sp_flush moved the read position */
+            run_zero = z; run_start = b; run_len = 0;
+        }
+        run_len++;
+        fseeko(in, (off_t)((b + 1) * bs), SEEK_SET);
+    }
+    if (!rc) rc = sp_flush(in, o, run_start, run_len, run_zero, &nchunks);
+    if (!rc) {
+        uint32_t magic = 0xED26FF3A, tb = (uint32_t)nblk, bsz = bs, zero32 = 0;
+        uint16_t maj = 1, min = 0, fh = 28, ch = 12;
+        rewind(o);
+        fwrite(&magic, 4, 1, o); fwrite(&maj, 2, 1, o); fwrite(&min, 2, 1, o); fwrite(&fh, 2, 1, o);
+        fwrite(&ch, 2, 1, o); fwrite(&bsz, 4, 1, o); fwrite(&tb, 4, 1, o); fwrite(&nchunks, 4, 1, o); fwrite(&zero32, 4, 1, o);
+    }
+    free(blk); free(zero); fclose(in);
+    if (fclose(o)) rc = -1;
+    if (rc) remove(dst);
+    return rc;
+}
+
+/* ---------- repack ---------- */
+
+#define REPACK_SUFFIX ""   /* built images keep the name they were unpacked with */
+
+typedef struct { uint64_t blocks, entries; } tstat_t;
+
+static void tree_stat(const char *dir, tstat_t *st, int depth) {
+    DIR *d = opendir(dir); if (!d || depth > 64) { if (d) closedir(d); return; }
+    struct dirent *de; uint64_t n = 0;
+    while ((de = readdir(d))) {
+        if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
+        char p[8192]; snprintf(p, sizeof p, "%s/%s", dir, de->d_name);
+        struct stat sb; if (lstat(p, &sb)) continue;
+        n++; st->entries++;
+        if (S_ISDIR(sb.st_mode)) tree_stat(p, st, depth + 1);
+        else if (S_ISREG(sb.st_mode)) st->blocks += ((uint64_t)sb.st_size + 4095) / 4096 + (sb.st_size > (64 << 20) ? (uint64_t)sb.st_size / (128u << 20) + 1 : 0);
+        else if (S_ISLNK(sb.st_mode) && sb.st_size >= 60) st->blocks += 1;
+    }
+    closedir(d);
+    st->blocks += 1 + n / 60;                                  /* the directory's own blocks */
+}
+
+static uint64_t read_u64_file(const char *path) {
+    FILE *f = fopen(path, "r"); if (!f) return 0;
+    unsigned long long v = 0; if (fscanf(f, "%llu", &v) != 1) v = 0; fclose(f); return v;
+}
+
+static int read_opt(const char *path, const char *key, char *out, size_t n) {
+    FILE *f = fopen(path, "r"); if (!f) return 0;
+    char line[512]; size_t kl = strlen(key); int ok = 0;
+    while (fgets(line, sizeof line, f)) {
+        if (!strncmp(line, key, kl) && line[kl] == '=') { snprintf(out, n, "%s", line + kl + 1); out[strcspn(out, "\r\n")] = 0; ok = 1; break; }
+    }
+    fclose(f); return ok;
+}
+
+typedef struct {
+    int rw, autosize, sparse, out_kind, brlvl, erofslvl, shrink, delavb;
+    char mode[16];
+} ropts_t;
+
+static void avb_strip_line(char *line) {
+    if (line[0] == '#' || (!strchr(line, ' ') && !strchr(line, '\t'))) return;
+    char *f[6]; int nf = 0; char *p = line;
+    while (*p && nf < 5) { while (*p == ' ' || *p == '\t') p++; if (!*p || *p == '\n') break; f[nf++] = p; while (*p && *p != ' ' && *p != '\t' && *p != '\n') p++; }
+    if (nf < 5) return;
+    char *fl = f[4]; char *end = fl; while (*end && *end != ' ' && *end != '\t' && *end != '\n') end++;
+    char flags[1024]; size_t fl_len = (size_t)(end - fl); if (fl_len >= sizeof flags) return;
+    memcpy(flags, fl, fl_len); flags[fl_len] = 0;
+    char res[1024] = ""; char *save = NULL;
+    for (char *t = strtok_r(flags, ",", &save); t; t = strtok_r(NULL, ",", &save)) {
+        if (!strncmp(t, "avb", 3) || !strncmp(t, "verify", 6)) continue;
+        if (*res) strcat(res, ","); strcat(res, t);
+    }
+    if (!*res) strcpy(res, "defaults");
+    char tail[4096]; snprintf(tail, sizeof tail, "%s", end);
+    snprintf(fl, 1024 + strlen(tail) + 2, "%s%s", res, tail);
+}
+
+static void delavb_file(const char *path) {
+    FILE *f = fopen(path, "r"); if (!f) return;
+    char *out = malloc(1 << 20); size_t on = 0; char line[4096]; int changed = 0;
+    while (fgets(line, sizeof line, f) && on < (1 << 20) - 8192) {
+        char orig[4096]; snprintf(orig, sizeof orig, "%s", line);
+        char buf[8192]; snprintf(buf, sizeof buf, "%s", line); avb_strip_line(buf);
+        if (strcmp(buf, orig)) changed = 1;
+        on += (size_t)snprintf(out + on, (1 << 20) - on, "%s", buf);
+    }
+    fclose(f);
+    if (changed) { FILE *w = fopen(path, "w"); if (w) { fwrite(out, 1, on, w); fclose(w); printf("> AVB removed from %s\n", path); } }
+    free(out);
+}
+
+static void delavb_tree(const char *dir, int depth) {
+    DIR *d = opendir(dir); if (!d || depth > 6) { if (d) closedir(d); return; }
+    struct dirent *de;
+    while ((de = readdir(d))) {
+        if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
+        char p[8192]; snprintf(p, sizeof p, "%s/%s", dir, de->d_name);
+        struct stat sb; if (lstat(p, &sb)) continue;
+        if (S_ISDIR(sb.st_mode)) delavb_tree(p, depth + 1);
+        else if (S_ISREG(sb.st_mode) && !strncmp(de->d_name, "fstab", 5)) delavb_file(p);
+    }
+    closedir(d);
+}
+
+static int finish_output(const char *raw, const char *final, const ropts_t *o) {
+    int rc;
+    if (!access(final, F_OK)) printf("> Replacing existing: %s\n", final);
+    if (o->sparse) { printf("> Converting to sparse\n"); fflush(stdout); rc = raw_to_sparse(raw, final); remove(raw); }
+    else rc = rename(raw, final);
+    return rc;
+}
+
+static int repack_ext4(const char *name, const char *dro, const char *pro, const ropts_t *o) {
+    char tree[4400], cfgd[4400], fsc[4600], fcx[4600], fso[4600], inf[4600], final[4600], raw[4700];
+    snprintf(tree, sizeof tree, "%s/%s", dro, name); snprintf(cfgd, sizeof cfgd, "%s/config", dro);
+    snprintf(fsc, sizeof fsc, "%s/%s_fs_config", cfgd, name); snprintf(fcx, sizeof fcx, "%s/%s_file_contexts", cfgd, name);
+    snprintf(fso, sizeof fso, "%s/%s_fs_options", cfgd, name); snprintf(inf, sizeof inf, "%s/%s_info", cfgd, name);
+    snprintf(final, sizeof final, "%s/%s" REPACK_SUFFIX ".img", pro, name);
+    snprintf(raw, sizeof raw, "%s.tmp", final);
+    if (access(fsc, R_OK)) { fprintf(stderr, "> Error: %s not found\n", fsc); return 1; }
+    if (access(fcx, R_OK)) { fprintf(stderr, "> Warning: %s not found, SELinux labels will be missing\n", fcx); }
+
+    tstat_t st = {0, 0}; tree_stat(tree, &st, 0);
+    uint64_t inodes = st.entries + st.entries / 20 + 64;
+    uint64_t est = (st.blocks + inodes * 256 / 4096) * 103 / 100 + 160;      /* content + inode tables + fs overhead */
+    uint64_t blocks;
+    if (o->autosize) blocks = est * 105 / 100 + 2048;                       /* ~8 MiB free space */
+    else {
+        uint64_t sz = read_u64_file(inf);
+        if (sz < 4096) { printf("> Original size unknown (%s missing), using Auto\n", inf); blocks = est * 105 / 100 + 2048; }
+        else blocks = sz / 4096;
+    }
+    char uuid[64] = ""; read_opt(fso, "uuid", uuid, sizeof uuid);
+    int rc = 1;
+    for (int attempt = 0; attempt < 8; attempt++) {
+        printf("> Building ext4 (%s): %s, %llu blocks (%llu MiB)\n", o->rw ? "RW" : "RO", name,
+               (unsigned long long)blocks, (unsigned long long)(blocks * 4 / 1024)); fflush(stdout);
+        remove(raw);
+        FILE *z = fopen(raw, "wb"); if (!z) { fprintf(stderr, "> Error: cannot create %s\n", raw); return 1; }
+        if (ftruncate(fileno(z), (off_t)(blocks * 4096))) { fclose(z); fprintf(stderr, "> Error: not enough space\n"); return 1; }
+        fclose(z);
+        char nb[32], ni[32], lbl[64], mp[300], blk[32];
+        snprintf(ni, sizeof ni, "%llu", (unsigned long long)inodes); snprintf(blk, sizeof blk, "%llu", (unsigned long long)blocks);
+        snprintf(lbl, sizeof lbl, "%.15s", name); snprintf(mp, sizeof mp, "/%s", name); (void)nb;
+        char *mk[24]; int k = 0;
+        mk[k++] = "mke2fs"; mk[k++] = "-q"; mk[k++] = "-F"; mk[k++] = "-t"; mk[k++] = "ext4";
+        mk[k++] = "-b"; mk[k++] = "4096"; mk[k++] = "-I"; mk[k++] = "256"; mk[k++] = "-m"; mk[k++] = "0";
+        mk[k++] = "-N"; mk[k++] = ni; mk[k++] = "-L"; mk[k++] = lbl; mk[k++] = "-M"; mk[k++] = mp;
+        mk[k++] = "-O"; mk[k++] = "^has_journal,^resize_inode,^flex_bg,^metadata_csum,^64bit,uninit_bg,extent,huge_file,dir_nlink,extra_isize,dir_index,ext_attr,filetype,sparse_super,large_file";
+        if (uuid[0]) { mk[k++] = "-U"; mk[k++] = uuid; }
+        mk[k++] = raw; mk[k++] = blk; mk[k] = NULL;
+        if (run(mk)) { fprintf(stderr, "> Error: mke2fs failed%s\n", o->autosize ? "" : " (original size is probably too small, use Auto size)"); remove(raw); return 1; }
+
+        char *fd[24]; k = 0;
+        fd[k++] = "e2fsdroid"; fd[k++] = "-e"; fd[k++] = "-T"; fd[k++] = "1230768000";
+        fd[k++] = "-C"; fd[k++] = fsc;
+        if (!access(fcx, R_OK)) { fd[k++] = "-S"; fd[k++] = fcx; }
+        fd[k++] = "-a"; fd[k++] = mp;
+        if (!o->rw) fd[k++] = "-s";
+        fd[k++] = "-f"; fd[k++] = tree; fd[k++] = raw; fd[k] = NULL;
+        rc = run(fd);
+        if (!rc) break;
+        if (!o->autosize) { fprintf(stderr, "> Error: content does not fit into the original size, use Auto size\n"); remove(raw); return 1; }
+        blocks = blocks * 112 / 100 + 512;
+        fprintf(stderr, "> Image too small, retrying with a larger size\n");
+    }
+    if (rc) { fprintf(stderr, "> Error: e2fsdroid failed\n"); remove(raw); return 1; }
+    if (o->shrink) {
+        printf("> Shrinking free space\n"); fflush(stdout);
+        char *ck[] = { "e2fsck", "-fy", raw, NULL }; run(ck);
+        char *rs[] = { "resize2fs", "-f", "-M", raw, NULL };
+        if (run(rs)) fprintf(stderr, "> Warning: shrink failed, keeping full size\n");
+    }
+    if (finish_output(raw, final, o)) { fprintf(stderr, "> Error: cannot write %s\n", final); return 1; }
+    printf("> Done: %s\n", final);
+    return 0;
+}
+
+static int repack_erofs(const char *name, const char *dro, const char *pro, const ropts_t *o) {
+    char tree[4400], fsc[4600], fcx[4600], fso[4600], final[4600], raw[4700], mp[300], comp[64], uuid[64] = "", ub[80], fcb[4700], fsb[4700];
+    snprintf(tree, sizeof tree, "%s/%s", dro, name);
+    snprintf(fsc, sizeof fsc, "%s/config/%s_fs_config", dro, name); snprintf(fcx, sizeof fcx, "%s/config/%s_file_contexts", dro, name);
+    snprintf(fso, sizeof fso, "%s/config/%s_fs_options", dro, name);
+    snprintf(final, sizeof final, "%s/%s" REPACK_SUFFIX ".img", pro, name); snprintf(raw, sizeof raw, "%s.tmp", final);
+    snprintf(mp, sizeof mp, "--mount-point=/%s", name);
+    read_opt(fso, "uuid", uuid, sizeof uuid);
+    int lvl = o->erofslvl;
+    if (!strcmp(o->mode, "lz4")) snprintf(comp, sizeof comp, "-zlz4");
+    else if (!strcmp(o->mode, "lzma")) snprintf(comp, sizeof comp, "-zlzma,%d", lvl > 0 ? lvl : 6);
+    else snprintf(comp, sizeof comp, "-zlz4hc,%d", lvl > 0 ? lvl : 9);
+    char *a[20]; int k = 0;
+    a[k++] = "mkfs.erofs"; a[k++] = comp; a[k++] = "-T"; a[k++] = "0";
+    if (uuid[0]) { snprintf(ub, sizeof ub, "%s", uuid); a[k++] = "-U"; a[k++] = ub; }
+    a[k++] = mp;
+    snprintf(fsb, sizeof fsb, "--fs-config-file=%s", fsc); if (!access(fsc, R_OK)) a[k++] = fsb;
+    snprintf(fcb, sizeof fcb, "--file-contexts=%s", fcx); if (!access(fcx, R_OK)) a[k++] = fcb;
+    a[k++] = raw; a[k++] = tree; a[k] = NULL;
+    printf("> Building erofs (%s): %s\n", comp, name); fflush(stdout);
+    remove(raw);
+    if (run(a)) { fprintf(stderr, "> Error: mkfs.erofs failed\n"); remove(raw); return 1; }
+    if (finish_output(raw, final, o)) return 1;
+    printf("> Done: %s\n", final);
+    return 0;
+}
+
+static int repack_boot(const char *name, const char *dro, const char *pro) {
+    char dir[4400], orig[4400], final[4600], cwd[2048];
+    snprintf(dir, sizeof dir, "%s/%s", dro, name); snprintf(orig, sizeof orig, "%s/%s.img", dir, name);
+    snprintf(final, sizeof final, "%s/%s" REPACK_SUFFIX ".img", pro, name);
+    if (access(orig, R_OK)) snprintf(orig, sizeof orig, "%s/%s.img", pro, name);        /* fallback: old projects */
+    if (access(orig, R_OK)) { fprintf(stderr, "> Error: original %s/%s.img is required to repack boot images\n", dir, name); return 1; }
+    if (!getcwd(cwd, sizeof cwd) || chdir(dir)) return 1;
+    printf("> Repacking boot image: %s\n", name); fflush(stdout);
+    char tmp[4700]; snprintf(tmp, sizeof tmp, "%s.tmp", final);
+    char *a[] = { "magiskboot", "repack", orig, tmp, NULL };
+    int rc = run(a);
+    if (chdir(cwd)) return 1;
+    if (!rc) {
+        if (!access(final, F_OK)) printf("> Replacing existing: %s\n", final);
+        if (rename(tmp, final)) { fprintf(stderr, "> Error: cannot write %s\n", final); return 1; }
+        printf("> Done: %s\n", final);
+    } else remove(tmp);
+    return rc;
+}
+
+/* dna repack <dirs,...> --read 1|0 --auto 1|0 --format 0|1 --type 0|1|2 --br N --erofs N --mode lz4hc|lz4|lzma
+ *            --compress 0|1 --delavb 0|1 --convert 0|1|2   (convert: 0 ext4, 1 erofs, 2 f2fs) */
+static int cmd_repack(int argc, char **argv) {
+    ropts_t o = { 1, 1, 0, 0, 0, 0, 0, 0, "lz4hc" }; int conv = 0;
+    char *names[128]; int nn = 0;
+    for (int i = 0; i < argc; i++) {
+        const char *a = argv[i]; int hasv = i + 1 < argc;
+        if (!strcmp(a, "--read") && hasv) o.rw = atoi(argv[++i]);
+        else if (!strcmp(a, "--auto") && hasv) o.autosize = atoi(argv[++i]);
+        else if (!strcmp(a, "--format") && hasv) o.sparse = atoi(argv[++i]);
+        else if (!strcmp(a, "--type") && hasv) o.out_kind = atoi(argv[++i]);
+        else if (!strcmp(a, "--br") && hasv) o.brlvl = atoi(argv[++i]);
+        else if (!strcmp(a, "--erofs") && hasv) o.erofslvl = atoi(argv[++i]);
+        else if (!strcmp(a, "--mode") && hasv) snprintf(o.mode, sizeof o.mode, "%s", argv[++i]);
+        else if (!strcmp(a, "--compress")) o.shrink = flag_val(argc, argv, &i);
+        else if (!strcmp(a, "--delavb")) o.delavb = flag_val(argc, argv, &i);
+        else if (!strcmp(a, "--convert") && hasv) conv = atoi(argv[++i]);
+        else if (a[0] != '-') for (char *t = strtok(argv[i], ", \t\n"); t && nn < 128; t = strtok(NULL, ", \t\n")) names[nn++] = t;
+    }
+    const char *dro = getenv("DNA_DRO"), *pro = getenv("DNA_PRO");
+    if (!dro || !*dro || !pro || !*pro) { fprintf(stderr, "> Error: project is not selected\n"); return 1; }
+    if (!nn) { fprintf(stderr, "usage: dna repack <dir[,dir]> [options]\n"); return 2; }
+    if (o.out_kind != 0) { fprintf(stderr, "> Error: DAT/BR output is not implemented yet (use IMG)\n"); return 64; }
+    int fail = 0;
+    for (int i = 0; i < nn; i++) {
+        char *n = names[i]; size_t l = strlen(n); while (l && n[l - 1] == '/') n[--l] = 0;
+        if (!strcmp(n, "config") || !*n) continue;
+        char tree[4400], hdr[4600]; snprintf(tree, sizeof tree, "%s/%s", dro, n); snprintf(hdr, sizeof hdr, "%s/header", tree);
+        struct stat sb; if (stat(tree, &sb) || !S_ISDIR(sb.st_mode)) { fprintf(stderr, "> Error: %s not found\n", tree); fail = 1; continue; }
+        printf("> Packing: %s\n", n); fflush(stdout);
+        int rc;
+        if (!access(hdr, R_OK)) rc = repack_boot(n, dro, pro);
+        else {
+            if (o.delavb) delavb_tree(tree, 0);
+            if (conv == 1) rc = repack_erofs(n, dro, pro, &o);
+            else if (conv == 2) { fprintf(stderr, "> Error: f2fs repack is not implemented yet\n"); rc = 64; }
+            else rc = repack_ext4(n, dro, pro, &o);
+        }
+        if (rc) { fprintf(stderr, "> Failed: %s\n", n); fail = 1; }
+    }
+    return fail ? 1 : 0;
+}
+
 /* ---------- dispatcher ---------- */
 
 static int not_yet(const char *c) {
@@ -738,8 +1065,9 @@ int main(int argc, char **argv) {
     if (!strcmp(c, "gettype"))  return cmd_gettype(argc - 2, argv + 2);
     if (!strcmp(c, "lpunpack")) return cmd_lpunpack(argc - 2, argv + 2);
     if (!strcmp(c, "extract"))  return cmd_extract(argc - 2, argv + 2);
+    if (!strcmp(c, "repack"))   return cmd_repack(argc - 2, argv + 2);
     if (!strcmp(c, "dumper") ||
-        !strcmp(c, "lpmake")  || !strcmp(c, "repack")  || !strcmp(c, "convert")  ||
+        !strcmp(c, "lpmake")  || !strcmp(c, "convert")  ||
         !strcmp(c, "unzip"))
         return not_yet(c);
     fprintf(stderr, "dna: unknown command '%s'\n", c);
