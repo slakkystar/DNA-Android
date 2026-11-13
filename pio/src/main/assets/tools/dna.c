@@ -17,7 +17,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 
-#define VERSION "0.3.5"
+#define VERSION "0.3.6"
 
 /* ---------- format detection ---------- */
 
@@ -801,7 +801,7 @@ static int raw_to_sparse(const char *src, const char *dst) {
 
 /* ---------- repack ---------- */
 
-#define REPACK_SUFFIX ""   /* built images keep the name they were unpacked with */
+#define REPACK_SUFFIX ""   /* built images keep the name they were unpacked with; they go to $DNA_PRO/out/ */
 
 typedef struct { uint64_t blocks, entries; } tstat_t;
 
@@ -898,7 +898,7 @@ static int repack_ext4(const char *name, const char *dro, const char *pro, const
     snprintf(tree, sizeof tree, "%s/%s", dro, name); snprintf(cfgd, sizeof cfgd, "%s/config", dro);
     snprintf(fsc, sizeof fsc, "%s/%s_fs_config", cfgd, name); snprintf(fcx, sizeof fcx, "%s/%s_file_contexts", cfgd, name);
     snprintf(fso, sizeof fso, "%s/%s_fs_options", cfgd, name); snprintf(inf, sizeof inf, "%s/%s_info", cfgd, name);
-    snprintf(final, sizeof final, "%s/%s" REPACK_SUFFIX ".img", pro, name);
+    snprintf(final, sizeof final, "%s/out/%s" REPACK_SUFFIX ".img", pro, name);
     snprintf(raw, sizeof raw, "%s.tmp", final);
     if (access(fsc, R_OK)) { fprintf(stderr, "> Error: %s not found\n", fsc); return 1; }
     if (access(fcx, R_OK)) { fprintf(stderr, "> Warning: %s not found, SELinux labels will be missing\n", fcx); }
@@ -964,7 +964,7 @@ static int repack_erofs(const char *name, const char *dro, const char *pro, cons
     snprintf(tree, sizeof tree, "%s/%s", dro, name);
     snprintf(fsc, sizeof fsc, "%s/config/%s_fs_config", dro, name); snprintf(fcx, sizeof fcx, "%s/config/%s_file_contexts", dro, name);
     snprintf(fso, sizeof fso, "%s/config/%s_fs_options", dro, name);
-    snprintf(final, sizeof final, "%s/%s" REPACK_SUFFIX ".img", pro, name); snprintf(raw, sizeof raw, "%s.tmp", final);
+    snprintf(final, sizeof final, "%s/out/%s" REPACK_SUFFIX ".img", pro, name); snprintf(raw, sizeof raw, "%s.tmp", final);
     snprintf(mp, sizeof mp, "--mount-point=/%s", name);
     read_opt(fso, "uuid", uuid, sizeof uuid);
     int lvl = o->erofslvl;
@@ -989,7 +989,7 @@ static int repack_erofs(const char *name, const char *dro, const char *pro, cons
 static int repack_boot(const char *name, const char *dro, const char *pro) {
     char dir[4400], orig[4400], final[4600], cwd[2048];
     snprintf(dir, sizeof dir, "%s/%s", dro, name); snprintf(orig, sizeof orig, "%s/%s.img", dir, name);
-    snprintf(final, sizeof final, "%s/%s" REPACK_SUFFIX ".img", pro, name);
+    snprintf(final, sizeof final, "%s/out/%s" REPACK_SUFFIX ".img", pro, name);
     if (access(orig, R_OK)) snprintf(orig, sizeof orig, "%s/%s.img", pro, name);        /* fallback: old projects */
     if (access(orig, R_OK)) { fprintf(stderr, "> Error: original %s/%s.img is required to repack boot images\n", dir, name); return 1; }
     if (!getcwd(cwd, sizeof cwd) || chdir(dir)) return 1;
@@ -1029,6 +1029,8 @@ static int cmd_repack(int argc, char **argv) {
     if (!dro || !*dro || !pro || !*pro) { fprintf(stderr, "> Error: project is not selected\n"); return 1; }
     if (!nn) { fprintf(stderr, "usage: dna repack <dir[,dir]> [options]\n"); return 2; }
     if (o.out_kind != 0) { fprintf(stderr, "> Error: DAT/BR output is not implemented yet (use IMG)\n"); return 64; }
+    { char od[4400]; snprintf(od, sizeof od, "%s/out", pro);
+      if (mkdir_p(od)) { fprintf(stderr, "> Error: cannot create %s\n", od); return 1; } }
     int fail = 0;
     for (int i = 0; i < nn; i++) {
         char *n = names[i]; size_t l = strlen(n); while (l && n[l - 1] == '/') n[--l] = 0;
