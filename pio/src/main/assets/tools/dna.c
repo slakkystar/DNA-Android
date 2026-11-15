@@ -17,7 +17,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 
-#define VERSION "0.3.8"
+#define VERSION "0.4"
 
 /* ---------- format detection ---------- */
 
@@ -799,6 +799,102 @@ static int raw_to_sparse(const char *src, const char *dst) {
     return rc;
 }
 
+static int blk_zero(const uint8_t *p) {                  /* all 4096 bytes are zero */
+    const uint64_t *q = (const uint64_t *)(const void *)p;
+    for (int i = 0; i < 512; i++) if (q[i]) return 0;
+    return 1;
+}
+
+/* ---------- img -> .new.dat / .transfer.list / .patch.dat (+ brotli) ---------- */
+
+typedef struct { uint64_t *v; size_t n, cap; } ranges_t;       /* flat [start, end) pairs */
+
+static void rg_add(ranges_t *r, uint64_t blk) {
+    if (r->n && r->v[r->n - 1] == blk) { r->v[r->n - 1] = blk + 1; return; }   /* extend the last range */
+    if (r->n + 2 > r->cap) { r->cap = r->cap ? r->cap * 2 : 64; r->v = realloc(r->v, r->cap * sizeof *r->v); }
+    r->v[r->n++] = blk; r->v[r->n++] = blk + 1;
+}
+
+static void rg_print(FILE *f, const char *cmd, const ranges_t *r) {
+    fprintf(f, "%s %zu", cmd, r->n);
+    for (size_t i = 0; i < r->n; i++) fprintf(f, ",%llu", (unsigned long long)r->v[i]);
+    fputc('\n', f);
+}
+
+/* Layout follows the original: block 0 ("clobbered") is always sent first, then the zero blocks,
+ * then the remaining data; new.dat holds block 0 followed by the other data blocks in order. */
+static int img_to_dat(const char *img, const char *outdir, const char *name, int br_level, int make_br) {
+    img_t im; if (img_open(&im, img)) { fprintf(stderr, "> Error: cannot read %s\n", img); return -1; }
+    char datp[4600], tlp[4600], pdp[4600];
+    snprintf(datp, sizeof datp, "%s/%s.new.dat", outdir, name); snprintf(tlp, sizeof tlp, "%s/%s.transfer.list", outdir, name);
+    snprintf(pdp, sizeof pdp, "%s/%s.patch.dat", outdir, name);
+    FILE *d = fopen(datp, "wb"); if (!d) { img_close(&im); return -1; }
+    uint64_t nblk = (im.size + 4095) / 4096; ranges_t zero = {0}, data = {0};
+    uint8_t *buf = malloc(1 << 20); int rc = 0;
+    for (uint64_t b = 0; b < nblk && !rc; ) {
+        uint64_t nb = nblk - b; if (nb > 256) nb = 256;
+        memset(buf, 0, nb * 4096);
+        uint64_t off = b * 4096, have = im.size > off ? im.size - off : 0; if (have > nb * 4096) have = nb * 4096;
+        if (have && !img_read(&im, off, buf, have)) { rc = -1; break; }
+        for (uint64_t i = 0; i < nb; i++) {
+            uint64_t blk = b + i; const uint8_t *p = buf + i * 4096;
+            if (blk == 0) { if (fwrite(p, 1, 4096, d) != 4096) rc = -1; continue; }
+            if (blk_zero(p)) rg_add(&zero, blk);
+            else { rg_add(&data, blk); if (fwrite(p, 1, 4096, d) != 4096) rc = -1; }
+        }
+        b += nb;
+    }
+    free(buf); img_close(&im);
+    if (fclose(d)) rc = -1;
+    if (!rc) {
+        FILE *t = fopen(tlp, "w"), *pd = fopen(pdp, "wb");
+        if (!t || !pd) rc = -1;
+        else {
+            fprintf(t, "4\n%llu\n0\n0\nnew 2,0,1\n", (unsigned long long)nblk);
+            if (zero.n) rg_print(t, "zero", &zero);
+            if (data.n) rg_print(t, "new", &data);
+        }
+        if (t && fclose(t)) rc = -1;
+        if (pd) fclose(pd);
+    }
+    free(zero.v); free(data.v);
+    if (!rc && make_br) {
+        char br[4700], q[16]; snprintf(br, sizeof br, "%s.br", datp); snprintf(q, sizeof q, "%d", br_level < 0 ? 3 : br_level > 11 ? 11 : br_level);
+        printf("> Compressing with brotli (level %s): %s.new.dat\n", q, name); fflush(stdout);
+        char *a[] = { "brotli", "-q", q, "-f", "-o", br, datp, NULL };
+        rc = run(a);
+        if (!rc) remove(datp);
+    }
+    if (rc) { remove(datp); remove(tlp); remove(pdp); }
+    return rc;
+}
+
+/* dna convert <img[,img]> --delete 0|1 --type 0(DAT)|1(BR) --br LEVEL */
+static int cmd_convert(int argc, char **argv) {
+    int del = 0, type = 0, lvl = 3, nn = 0, fail = 0; char *names[256];
+    for (int i = 0; i < argc; i++) {
+        if (!strcmp(argv[i], "--delete")) del = flag_val(argc, argv, &i);
+        else if (!strcmp(argv[i], "--type") && i + 1 < argc) type = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--br") && i + 1 < argc) lvl = atoi(argv[++i]);
+        else if (argv[i][0] != '-') for (char *t = strtok(argv[i], ", \t\n"); t && nn < 256; t = strtok(NULL, ", \t\n")) names[nn++] = t;
+    }
+    if (!nn) { fprintf(stderr, "usage: dna convert <img[,img]> [--delete 0|1] [--type 0|1] [--br N]\n"); return 2; }
+    const char *pro = getenv("DNA_PRO"); char od[4400];
+    snprintf(od, sizeof od, "%s/out", pro && *pro ? pro : ".");
+    if (mkdir_p(od)) { fprintf(stderr, "> Error: cannot create %s\n", od); return 1; }
+    for (int i = 0; i < nn; i++) {
+        char full[4400]; snprintf(full, sizeof full, "%s", names[i]);
+        if (access(full, R_OK) && pro && *pro) snprintf(full, sizeof full, "%s/%s", pro, names[i]);
+        if (access(full, R_OK)) { fprintf(stderr, "> Error: file not found: %s\n", names[i]); fail = 1; continue; }
+        char name[512]; base_name(full, name, sizeof name);
+        printf("> Converting: %s -> %s\n", names[i], type ? "br" : "dat"); fflush(stdout);
+        if (img_to_dat(full, od, name, lvl, type == 1)) { fprintf(stderr, "> Failed: %s\n", names[i]); fail = 1; continue; }
+        printf("> Done: %s/%s.%s\n", od, name, type ? "new.dat.br" : "new.dat");
+        if (del) { printf("> Deleting: %s\n", names[i]); remove(full); }
+    }
+    return fail ? 1 : 0;
+}
+
 /* ---------- repack ---------- */
 
 #define REPACK_SUFFIX ""   /* built images keep the name they were unpacked with; they go to $DNA_PRO/out/ */
@@ -887,8 +983,18 @@ static void delavb_tree(const char *dir, int depth) {
 
 static int finish_output(const char *raw, const char *final, const ropts_t *o) {
     int rc;
+    if (o->out_kind) {                                   /* 1 = DAT, 2 = BR: the image itself is only an intermediate */
+        char dir[4400], name[512]; snprintf(dir, sizeof dir, "%s", final);
+        char *sl = strrchr(dir, '/'); if (sl) *sl = 0; else strcpy(dir, ".");
+        base_name(final, name, sizeof name);
+        printf("> Converting to %s\n", o->out_kind == 2 ? "dat + brotli" : "dat"); fflush(stdout);
+        rc = img_to_dat(raw, dir, name, o->brlvl > 0 ? o->brlvl : 3, o->out_kind == 2);
+        remove(raw);
+        if (!rc) printf("> Done: %s/%s.%s\n", dir, name, o->out_kind == 2 ? "new.dat.br" : "new.dat");
+        return rc;
+    }
     if (!access(final, F_OK)) printf("> Replacing existing: %s\n", final);
-    if (o->sparse) { printf("> Converting to sparse\n"); fflush(stdout); rc = raw_to_sparse(raw, final); remove(raw); }
+    if (o->sparse && !o->out_kind) { printf("> Converting to sparse\n"); fflush(stdout); rc = raw_to_sparse(raw, final); remove(raw); }
     else rc = rename(raw, final);
     return rc;
 }
@@ -955,7 +1061,7 @@ static int repack_ext4(const char *name, const char *dro, const char *pro, const
         if (run(rs)) fprintf(stderr, "> Warning: shrink failed, keeping full size\n");
     }
     if (finish_output(raw, final, o)) { fprintf(stderr, "> Error: cannot write %s\n", final); return 1; }
-    printf("> Done: %s\n", final);
+    if (!o->out_kind) printf("> Done: %s\n", final);
     return 0;
 }
 
@@ -982,7 +1088,7 @@ static int repack_erofs(const char *name, const char *dro, const char *pro, cons
     remove(raw);
     if (run(a)) { fprintf(stderr, "> Error: mkfs.erofs failed\n"); remove(raw); return 1; }
     if (finish_output(raw, final, o)) return 1;
-    printf("> Done: %s\n", final);
+    if (!o->out_kind) printf("> Done: %s\n", final);
     return 0;
 }
 
@@ -1028,7 +1134,6 @@ static int cmd_repack(int argc, char **argv) {
     const char *dro = getenv("DNA_DRO"), *pro = getenv("DNA_PRO");
     if (!dro || !*dro || !pro || !*pro) { fprintf(stderr, "> Error: project is not selected\n"); return 1; }
     if (!nn) { fprintf(stderr, "usage: dna repack <dir[,dir]> [options]\n"); return 2; }
-    if (o.out_kind != 0) { fprintf(stderr, "> Error: DAT/BR output is not implemented yet (use IMG)\n"); return 64; }
     { char od[4400]; snprintf(od, sizeof od, "%s/out", pro);
       if (mkdir_p(od)) { fprintf(stderr, "> Error: cannot create %s\n", od); return 1; } }
     int fail = 0;
@@ -1347,10 +1452,8 @@ int main(int argc, char **argv) {
     if (!strcmp(c, "extract"))  return cmd_extract(argc - 2, argv + 2);
     if (!strcmp(c, "repack"))   return cmd_repack(argc - 2, argv + 2);
     if (!strcmp(c, "lpmake"))   return cmd_lpmake(argc - 2, argv + 2);
-    if (!strcmp(c, "dumper") ||
-        !strcmp(c, "convert")  ||
-        !strcmp(c, "unzip"))
-        return not_yet(c);
+    if (!strcmp(c, "convert"))  return cmd_convert(argc - 2, argv + 2);
+    if (!strcmp(c, "dumper") || !strcmp(c, "unzip")) return not_yet(c);
     fprintf(stderr, "dna: unknown command '%s'\n", c);
     return 2;
 }
