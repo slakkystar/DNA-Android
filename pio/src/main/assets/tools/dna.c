@@ -17,7 +17,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 
-#define VERSION "0.3.6"
+#define VERSION "0.3.8"
 
 /* ---------- format detection ---------- */
 
@@ -1051,6 +1051,284 @@ static int cmd_repack(int argc, char **argv) {
     return fail ? 1 : 0;
 }
 
+/* ---------- SHA-256 (liblp checksums) ---------- */
+
+typedef struct { uint32_t h[8]; uint64_t len; uint8_t buf[64]; } sha_t;
+
+static const uint32_t SHA_K[64] = {
+0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2 };
+
+#define ROR(x, n) (((x) >> (n)) | ((x) << (32 - (n))))
+
+static void sha_block(sha_t *c, const uint8_t *p) {
+    uint32_t w[64], a, b, cc, d, e, f, g, h, t1, t2;
+    for (int i = 0; i < 16; i++) w[i] = ((uint32_t)p[i*4] << 24) | ((uint32_t)p[i*4+1] << 16) | ((uint32_t)p[i*4+2] << 8) | p[i*4+3];
+    for (int i = 16; i < 64; i++) {
+        uint32_t s0 = ROR(w[i-15], 7) ^ ROR(w[i-15], 18) ^ (w[i-15] >> 3);
+        uint32_t s1 = ROR(w[i-2], 17) ^ ROR(w[i-2], 19) ^ (w[i-2] >> 10);
+        w[i] = w[i-16] + s0 + w[i-7] + s1;
+    }
+    a = c->h[0]; b = c->h[1]; cc = c->h[2]; d = c->h[3]; e = c->h[4]; f = c->h[5]; g = c->h[6]; h = c->h[7];
+    for (int i = 0; i < 64; i++) {
+        t1 = h + (ROR(e, 6) ^ ROR(e, 11) ^ ROR(e, 25)) + ((e & f) ^ (~e & g)) + SHA_K[i] + w[i];
+        t2 = (ROR(a, 2) ^ ROR(a, 13) ^ ROR(a, 22)) + ((a & b) ^ (a & cc) ^ (b & cc));
+        h = g; g = f; f = e; e = d + t1; d = cc; cc = b; b = a; a = t1 + t2;
+    }
+    c->h[0] += a; c->h[1] += b; c->h[2] += cc; c->h[3] += d; c->h[4] += e; c->h[5] += f; c->h[6] += g; c->h[7] += h;
+}
+
+static void sha256(const void *data, size_t len, uint8_t out[32]) {
+    sha_t c = {{0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19}, len, {0}};
+    const uint8_t *p = data; size_t rest = len;
+    while (rest >= 64) { sha_block(&c, p); p += 64; rest -= 64; }
+    memset(c.buf, 0, 64); memcpy(c.buf, p, rest); c.buf[rest] = 0x80;
+    if (rest >= 56) { sha_block(&c, c.buf); memset(c.buf, 0, 64); }
+    uint64_t bits = (uint64_t)len * 8;
+    for (int i = 0; i < 8; i++) c.buf[56 + i] = (uint8_t)(bits >> (56 - 8 * i));
+    sha_block(&c, c.buf);
+    for (int i = 0; i < 8; i++) { out[i*4] = c.h[i] >> 24; out[i*4+1] = c.h[i] >> 16; out[i*4+2] = c.h[i] >> 8; out[i*4+3] = (uint8_t)c.h[i]; }
+}
+
+/* ---------- output sink: raw (holes) or sparse, written strictly in order ---------- */
+
+typedef struct {
+    FILE *o; int sparse; uint64_t blocks; uint32_t nchunks; int err;
+    int run; uint32_t fillv, rblocks; off_t hdr;          /* open run: 1 = raw data, 2 = fill */
+} sink_t;
+
+static void sk_chunk(sink_t *k, uint16_t type, uint32_t blocks, uint32_t payload, int with_fill, uint32_t fill) {
+    uint8_t ch[12] = {0}; ch[0] = type & 0xFF; ch[1] = type >> 8;
+    uint32_t tot = 12 + payload + (with_fill ? 4 : 0); memcpy(ch + 4, &blocks, 4); memcpy(ch + 8, &tot, 4);
+    if (fwrite(ch, 1, 12, k->o) != 12) k->err = 1;
+    if (with_fill && fwrite(&fill, 4, 1, k->o) != 1) k->err = 1;
+    k->nchunks++;
+}
+
+/* finish the open run: patch its chunk header with the final block count */
+static void sk_close(sink_t *k) {
+    if (!k->run) return;
+    if (k->sparse) {
+        uint32_t tot = 12 + (k->run == 1 ? k->rblocks * 4096u : 4u);
+        off_t end = ftello(k->o);
+        if (fseeko(k->o, k->hdr + 4, SEEK_SET) || fwrite(&k->rblocks, 4, 1, k->o) != 1 || fwrite(&tot, 4, 1, k->o) != 1 || fseeko(k->o, end, SEEK_SET)) k->err = 1;
+    }
+    k->run = 0;
+}
+
+static void sk_skip(sink_t *k, uint64_t len, uint16_t sparse_type) {   /* gap or explicit zeros */
+    sk_close(k);
+    uint64_t nb = len / 4096; k->blocks += nb;
+    if (!nb) return;
+    if (k->sparse) { while (nb) { uint32_t n = nb > 0x7FFFFFF ? 0x7FFFFFF : (uint32_t)nb; sk_chunk(k, sparse_type, n, 0, sparse_type == 0xCAC2, 0); nb -= n; } }
+    else if (fseeko(k->o, (off_t)len, SEEK_CUR)) k->err = 1;
+}
+static void sk_gap(sink_t *k, uint64_t len)  { sk_skip(k, len, 0xCAC3); }   /* untouched on flash */
+static void sk_zero(sink_t *k, uint64_t len) { sk_skip(k, len, 0xCAC2); }   /* explicit zeros */
+
+static void sk_raw(sink_t *k, const uint8_t *buf, uint64_t len) {            /* metadata: written as is */
+    sk_close(k);
+    uint64_t nb = len / 4096; k->blocks += nb;
+    if (!nb) return;
+    if (k->sparse) sk_chunk(k, 0xCAC1, (uint32_t)nb, (uint32_t)len, 0, 0);
+    if (fwrite(buf, 1, len, k->o) != len) k->err = 1;
+}
+
+/* One partition block. Like libsparse: a block made of one repeated 32-bit value becomes a FILL chunk
+ * (merged with neighbours of the same value), anything else is raw data (merged too). */
+static void sk_block(sink_t *k, const uint8_t *p) {
+    const uint32_t *w = (const uint32_t *)(const void *)p;
+    int uniform = 1; for (int i = 1; i < 1024; i++) if (w[i] != w[0]) { uniform = 0; break; }
+    k->blocks++;
+    if (uniform) {
+        uint32_t v = w[0];
+        if (k->run == 2 && k->fillv == v) { k->rblocks++; }
+        else { sk_close(k); k->run = 2; k->fillv = v; k->rblocks = 1; k->hdr = ftello(k->o); if (k->sparse) sk_chunk(k, 0xCAC2, 1, 0, 1, v); }
+        if (!k->sparse) { if (v == 0) { if (fseeko(k->o, 4096, SEEK_CUR)) k->err = 1; } else if (fwrite(p, 1, 4096, k->o) != 4096) k->err = 1; }
+    } else {
+        if (k->run == 1) k->rblocks++;
+        else { sk_close(k); k->run = 1; k->rblocks = 1; k->hdr = ftello(k->o); if (k->sparse) sk_chunk(k, 0xCAC1, 1, 4096, 0, 0); }
+        if (fwrite(p, 1, 4096, k->o) != 4096) k->err = 1;
+    }
+}
+
+static void sk_data(sink_t *k, const uint8_t *buf, uint64_t len) {
+    for (uint64_t i = 0; i + 4096 <= len && !k->err; i += 4096) sk_block(k, buf + i);
+}
+
+static int sk_finish(sink_t *k, uint64_t total) {
+    sk_close(k);
+    uint64_t want = total / 4096;
+    if (k->blocks < want) sk_gap(k, (want - k->blocks) * 4096);
+    if (k->sparse) {
+        uint32_t magic = 0xED26FF3A, bsz = 4096, tb = (uint32_t)want, zero32 = 0;
+        uint16_t maj = 1, min = 0, fh = 28, ch = 12;
+        if (fseeko(k->o, 0, SEEK_SET)) return -1;
+        fwrite(&magic, 4, 1, k->o); fwrite(&maj, 2, 1, k->o); fwrite(&min, 2, 1, k->o); fwrite(&fh, 2, 1, k->o);
+        fwrite(&ch, 2, 1, k->o); fwrite(&bsz, 4, 1, k->o); fwrite(&tb, 4, 1, k->o); fwrite(&k->nchunks, 4, 1, k->o); fwrite(&zero32, 4, 1, k->o);
+    } else if (ftruncate(fileno(k->o), (off_t)total)) k->err = 1;
+    return k->err ? -1 : 0;
+}
+
+/* ---------- lpmake: build a super image (liblp format) natively ---------- */
+
+#define LP_ALIGN (1024ull * 1024ull)
+#define LP_META_MAX 65536u
+
+typedef struct { char name[40]; char path[4400]; uint64_t size; int group; uint64_t start; } lpp_t;
+typedef struct { char base[40]; char slot; char path[4400]; uint64_t size; } lpi_t;
+
+static void put16(uint8_t *p, uint16_t v) { p[0] = v; p[1] = v >> 8; }
+static void put32(uint8_t *p, uint32_t v) { p[0] = v; p[1] = v >> 8; p[2] = v >> 16; p[3] = v >> 24; }
+static void put64(uint8_t *p, uint64_t v) { put32(p, (uint32_t)v); put32(p + 4, (uint32_t)(v >> 32)); }
+static uint64_t align_up(uint64_t v, uint64_t a) { return (v + a - 1) / a * a; }
+
+static int lp_not_dynamic(const char *b) {
+    static const char *skip[] = { "boot", "vendor_boot", "init_boot", "dtbo", "recovery", "super", "vbmeta", "userdata", "cache", "misc", NULL };
+    for (int i = 0; skip[i]; i++) if (!strcmp(b, skip[i])) return 1;
+    return !strncmp(b, "vbmeta", 6);
+}
+
+static int cmd_lpmake(int argc, char **argv) {
+    const char *type = "VAB", *group = "qti_dynamic_partitions"; int sparse = 0; double sz_in = 8.5;
+    lpi_t *im = calloc(256, sizeof *im); int nim = 0;
+    for (int i = 0; i < argc; i++) {
+        int hv = i + 1 < argc;
+        if (!strcmp(argv[i], "--type") && hv) type = argv[++i];
+        else if (!strcmp(argv[i], "--format") && hv) sparse = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--super_size") && hv) sz_in = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--super_group") && hv) group = argv[++i];
+        else if (argv[i][0] != '-') {
+            for (char *t = strtok(argv[i], ", \t\n"); t && nim < 256; t = strtok(NULL, ", \t\n")) {
+                lpi_t *x = &im[nim];
+                snprintf(x->path, sizeof x->path, "%s", t);
+                if (access(x->path, R_OK) && getenv("DNA_PRO")) snprintf(x->path, sizeof x->path, "%s/%s", getenv("DNA_PRO"), t);
+                if (access(x->path, R_OK)) { fprintf(stderr, "> Error: file not found: %s\n", t); free(im); return 1; }
+                base_name(t, x->base, sizeof x->base);
+                size_t l = strlen(x->base); x->slot = 0;
+                if (l > 2 && x->base[l-2] == '_' && (x->base[l-1] == 'a' || x->base[l-1] == 'b')) { x->slot = x->base[l-1]; x->base[l-2] = 0; }
+                if (lp_not_dynamic(x->base)) { fprintf(stderr, "> Warning: %s is not a dynamic partition, skipped\n", t); continue; }
+                img_t pi; if (img_open(&pi, x->path)) { fprintf(stderr, "> Error: cannot read %s\n", t); img_close(&pi); free(im); return 1; }
+                x->size = align_up(pi.size, 4096); img_close(&pi);
+                nim++;
+            }
+        }
+    }
+    int ab = strcmp(type, "A");
+    if (strcmp(type, "A") && strcmp(type, "AB") && strcmp(type, "VAB")) { fprintf(stderr, "> Error: --type must be A, AB or VAB\n"); free(im); return 2; }
+    if (!nim) { fprintf(stderr, "> Error: no images to pack\nusage: dna lpmake --type A|AB|VAB --format 0|1 --super_size GiB --super_group NAME img[,img]\n"); free(im); return 2; }
+    uint64_t super = (uint64_t)(sz_in < 4096 ? sz_in * 1073741824.0 : sz_in) & ~4095ull;
+    uint32_t slots = !strcmp(type, "A") ? 2 : 3;      /* matches the original dna: A-only 2, AB and virtual AB 3 */
+
+    lpp_t *pp = calloc(520, sizeof *pp); int np = 0;
+    if (!ab) {
+        for (int i = 0; i < nim; i++) {
+            for (int j = 0; j < np; j++) if (!strcmp(pp[j].name, im[i].base)) { fprintf(stderr, "> Error: duplicate partition %s (use one slot for A-only)\n", im[i].base); free(im); free(pp); return 1; }
+            snprintf(pp[np].name, sizeof pp[np].name, "%s", im[i].base); snprintf(pp[np].path, sizeof pp[np].path, "%s", im[i].path);
+            pp[np].size = im[i].size; pp[np].group = 1; np++;
+        }
+    } else {
+        char seen[256][40]; int ns = 0;
+        for (int i = 0; i < nim; i++) {
+            int dup = 0; for (int j = 0; j < ns; j++) if (!strcmp(seen[j], im[i].base)) dup = 1;
+            if (dup) continue;
+            snprintf(seen[ns++], 40, "%s", im[i].base);
+            lpi_t *sa = NULL, *sb = NULL;
+            for (int j = 0; j < nim; j++) if (!strcmp(im[j].base, im[i].base)) { if (im[j].slot == 'b') sb = &im[j]; else if (!sa) sa = &im[j]; }
+            lpp_t *a = &pp[np++], *b = &pp[np++];
+            snprintf(a->name, sizeof a->name, "%s_a", im[i].base); snprintf(b->name, sizeof b->name, "%s_b", im[i].base);
+            a->group = 1; b->group = 2;
+            if (sa) { snprintf(a->path, sizeof a->path, "%s", sa->path); a->size = sa->size; }
+            if (sb) { snprintf(b->path, sizeof b->path, "%s", sb->path); b->size = sb->size; }
+        }
+    }
+    for (int i = 0; i < np; i++) if (strlen(pp[i].name) > 35) { fprintf(stderr, "> Error: partition name too long: %s\n", pp[i].name); free(im); free(pp); return 1; }
+
+    uint64_t reserved = 12288 + 2ull * slots * LP_META_MAX, first_data = align_up(reserved, LP_ALIGN), cursor = first_data;
+    int ne = 0;
+    for (int i = 0; i < np; i++) if (pp[i].size) { pp[i].start = align_up(cursor, LP_ALIGN); cursor = pp[i].start + pp[i].size; ne++; }
+    if (cursor > super) {
+        fprintf(stderr, "> Error: partitions need %llu MiB but super is %llu MiB. Increase the super size.\n",
+                (unsigned long long)(cursor >> 20), (unsigned long long)(super >> 20));
+        free(im); free(pp); return 1;
+    }
+
+    int ng = ab ? 3 : 2;
+    uint32_t hsz = !strcmp(type, "VAB") ? 256 : 128;
+    uint32_t tsz = (uint32_t)(np * 52 + ne * 24 + ng * 48 + 64);
+    uint8_t *tb = calloc(1, tsz), *p = tb;
+    int ei = 0;
+    for (int i = 0; i < np; i++, p += 52) {
+        memcpy(p, pp[i].name, strlen(pp[i].name));
+        put32(p + 36, 0); put32(p + 40, ei); put32(p + 44, pp[i].size ? 1 : 0); put32(p + 48, pp[i].group);
+        if (pp[i].size) ei++;
+    }
+    for (int i = 0; i < np; i++) if (pp[i].size) { put64(p, pp[i].size / 512); put32(p + 8, 0); put64(p + 12, pp[i].start / 512); put32(p + 20, 0); p += 24; }
+    memcpy(p, "default", 7); p += 48;
+    if (!ab) { memcpy(p, group, strlen(group) < 35 ? strlen(group) : 35); put64(p + 40, super); p += 48; }
+    else for (int g = 0; g < 2; g++) {
+        char gn[64]; snprintf(gn, sizeof gn, "%s_%c", group, g ? 'b' : 'a');
+        memcpy(p, gn, strlen(gn) < 35 ? strlen(gn) : 35); put64(p + 40, super); p += 48;
+    }
+    put64(p, first_data / 512); put32(p + 8, (uint32_t)LP_ALIGN); put32(p + 12, 0); put64(p + 16, super); memcpy(p + 24, "super", 5); put32(p + 60, 0);
+
+    uint8_t hd[256] = {0};
+    put32(hd, 0x414C5030); put16(hd + 4, 10); put16(hd + 6, hsz == 256 ? 2 : 0); put32(hd + 8, hsz);
+    put32(hd + 44, tsz); sha256(tb, tsz, hd + 48);
+    put32(hd + 80, 0); put32(hd + 84, np); put32(hd + 88, 52);
+    put32(hd + 92, np * 52); put32(hd + 96, ne); put32(hd + 100, 24);
+    put32(hd + 104, np * 52 + ne * 24); put32(hd + 108, ng); put32(hd + 112, 48);
+    put32(hd + 116, np * 52 + ne * 24 + ng * 48); put32(hd + 120, 1); put32(hd + 124, 64);
+    if (hsz == 256) put32(hd + 128, 1);                       /* LP_HEADER_FLAG_VIRTUAL_AB_DEVICE */
+    sha256(hd, hsz, hd + 12);
+
+    uint8_t *md = calloc(1, reserved), geo[52] = {0};
+    put32(geo, 0x616c4467); put32(geo + 4, 52); put32(geo + 40, LP_META_MAX); put32(geo + 44, slots); put32(geo + 48, 4096);
+    { uint8_t tmp[52]; memcpy(tmp, geo, 52); memset(tmp + 8, 0, 32); sha256(tmp, 52, geo + 8); }
+    memcpy(md + 4096, geo, 52); memcpy(md + 8192, geo, 52);
+    for (uint32_t s = 0; s < slots * 2; s++) { memcpy(md + 12288 + (uint64_t)s * LP_META_MAX, hd, hsz); memcpy(md + 12288 + (uint64_t)s * LP_META_MAX + hsz, tb, tsz); }
+
+    char od[4400], final[4600], tmpf[4700];
+    const char *pro = getenv("DNA_PRO");
+    snprintf(od, sizeof od, "%s/out", pro && *pro ? pro : ".");
+    if (mkdir_p(od)) { fprintf(stderr, "> Error: cannot create %s\n", od); return 1; }
+    snprintf(final, sizeof final, "%s/super.img", od); snprintf(tmpf, sizeof tmpf, "%s.tmp", final);
+    sink_t k; memset(&k, 0, sizeof k); k.o = fopen(tmpf, "wb"); k.sparse = sparse;
+    if (!k.o) { fprintf(stderr, "> Error: cannot write %s\n", tmpf); return 1; }
+    if (sparse) { uint8_t z[28] = {0}; if (fwrite(z, 1, 28, k.o) != 28) k.err = 1; }
+    printf("> Building super (%s, %s): %llu MiB, %d partitions\n", type, sparse ? "sparse" : "raw", (unsigned long long)(super >> 20), np);
+    sk_zero(&k, 4096);
+    sk_raw(&k, md + 4096, reserved - 4096);
+    uint64_t cur = reserved;
+    uint8_t *buf = malloc(1 << 20);
+    for (int i = 0; i < np && !k.err; i++) {
+        if (!pp[i].size) continue;
+        sk_gap(&k, pp[i].start - cur);
+        printf("> Adding: %s (%llu KiB)\n", pp[i].name, (unsigned long long)(pp[i].size >> 10)); fflush(stdout);
+        img_t pi; if (img_open(&pi, pp[i].path)) { k.err = 1; break; }
+        for (uint64_t off = 0; off < pp[i].size && !k.err; off += 1 << 20) {
+            uint64_t n = pp[i].size - off; if (n > (1 << 20)) n = 1 << 20;
+            memset(buf, 0, n);
+            uint64_t have = off < pi.size ? pi.size - off : 0; if (have > n) have = n;
+            if (have && !img_read(&pi, off, buf, have)) { k.err = 1; break; }
+            sk_data(&k, buf, n);
+        }
+        img_close(&pi);
+        cur = pp[i].start + pp[i].size;
+    }
+    free(buf);
+    int rc = k.err ? -1 : sk_finish(&k, super);
+    if (fclose(k.o)) rc = -1;
+    free(im); free(pp); free(tb); free(md);
+    if (rc) { fprintf(stderr, "> Error: failed to write super image (disk full?)\n"); remove(tmpf); return 1; }
+    if (!access(final, F_OK)) printf("> Replacing existing: %s\n", final);
+    if (rename(tmpf, final)) { fprintf(stderr, "> Error: cannot write %s\n", final); return 1; }
+    printf("> Done: %s\n", final);
+    return 0;
+}
+
 /* ---------- dispatcher ---------- */
 
 static int not_yet(const char *c) {
@@ -1068,8 +1346,9 @@ int main(int argc, char **argv) {
     if (!strcmp(c, "lpunpack")) return cmd_lpunpack(argc - 2, argv + 2);
     if (!strcmp(c, "extract"))  return cmd_extract(argc - 2, argv + 2);
     if (!strcmp(c, "repack"))   return cmd_repack(argc - 2, argv + 2);
+    if (!strcmp(c, "lpmake"))   return cmd_lpmake(argc - 2, argv + 2);
     if (!strcmp(c, "dumper") ||
-        !strcmp(c, "lpmake")  || !strcmp(c, "convert")  ||
+        !strcmp(c, "convert")  ||
         !strcmp(c, "unzip"))
         return not_yet(c);
     fprintf(stderr, "dna: unknown command '%s'\n", c);
