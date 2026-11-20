@@ -7,14 +7,35 @@ on:
         description: 'Compile dna from dna.c (replaces prebuilt inside APK)'
         type: boolean
         default: true
+      superchunk_from_source:
+        description: 'Build superchunk helpers from source (replaces prebuilts inside APK)'
+        type: boolean
+        default: true
+      upload_to_telegram:
+        description: 'Upload the built APK to Telegram'
+        type: boolean
+        default: false
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.appversion.outputs.version }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Read versionName from build.gradle
+        id: appversion
+        run: |
+          VERSION_NAME=$(sed -nE 's/.*versionName[[:space:]]+"([^"]+)".*/\1/p' pio/build.gradle | head -n1)
+          if [ -z "$VERSION_NAME" ]; then
+            echo "::error::versionName not found in pio/build.gradle"
+            exit 1
+          fi
+          echo "version=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          echo "Detected versionName: $VERSION_NAME"
 
       - name: Set up JDK 17 (for sdkmanager)
         uses: actions/setup-java@v4
@@ -51,7 +72,7 @@ jobs:
           sdkmanager "platforms;android-28" "build-tools;28.0.3" "platform-tools"
 
       - name: Install Android NDK
-        if: ${{ inputs.dna_from_source }}
+        if: ${{ inputs.dna_from_source || inputs.superchunk_from_source }}
         env:
           JAVA_HOME: ${{ env.JAVA_HOME_17_X64 }}
         run: sdkmanager "ndk;21.4.7075529"
@@ -63,12 +84,12 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          ./gradlew :pio:assembleDebug -PdnaFromSource=${{ inputs.dna_from_source }} --stacktrace 2>&1 | tee debug_build.log
+          ./gradlew :pio:assembleDebug -PdnaFromSource=${{ inputs.dna_from_source }} -PsuperchunkFromSource=${{ inputs.superchunk_from_source }} --stacktrace 2>&1 | tee debug_build.log
 
       - name: Build release_mini APK (unsigned, minified)
         run: |
           set -o pipefail
-          ./gradlew :pio:assembleRelease_mini -PdnaFromSource=${{ inputs.dna_from_source }} --stacktrace 2>&1 | tee release_build.log
+          ./gradlew :pio:assembleRelease_mini -PdnaFromSource=${{ inputs.dna_from_source }} -PsuperchunkFromSource=${{ inputs.superchunk_from_source }} --stacktrace 2>&1 | tee release_build.log
 
       - name: Check for signing secrets
         id: signing
@@ -102,28 +123,28 @@ jobs:
             --ks-pass pass:"$KEYSTORE_PASSWORD" \
             --key-pass pass:"$KEY_PASSWORD" \
             --ks-key-alias "$KEY_ALIAS" \
-            --out DNA-BETA-2.8.0-EN-signed.apk \
+            --out "DNA-BETA-${{ steps.appversion.outputs.version }}-signed.apk" \
             pio-release_mini-aligned.apk
           rm -f release.keystore
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: dna-debug-2.8.0-apk
+          name: dna-debug-${{ steps.appversion.outputs.version }}-apk
           path: pio/build/outputs/apk/debug/*.apk
 
       - name: Upload release_mini APK (unsigned)
         uses: actions/upload-artifact@v4
         with:
-          name: DNA-BETA-2.8.0-EN-unsigned
+          name: DNA-BETA-${{ steps.appversion.outputs.version }}-unsigned
           path: pio/build/outputs/apk/release_mini/*.apk
 
       - name: Upload signed release_mini APK
         if: steps.signing.outputs.enabled == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: DNA-BETA-2.8.0-EN
-          path: DNA-BETA-2.8.0-EN-signed.apk
+          name: DNA-BETA-${{ steps.appversion.outputs.version }}
+          path: DNA-BETA-${{ steps.appversion.outputs.version }}-signed.apk
 
       - name: Collect full build logs
         if: always()
@@ -140,3 +161,12 @@ jobs:
           name: dna-build-logs
           path: logs/
           if-no-files-found: warn
+
+  telegram:
+    needs: build
+    if: ${{ inputs.upload_to_telegram }}
+    uses: ./.github/workflows/upload.yml
+    with:
+      artifact_pattern: 'DNA-*'
+      caption_title: 'DNA ${{ needs.build.outputs.version }}'
+    secrets: inherit

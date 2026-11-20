@@ -11,6 +11,14 @@ on:
         description: 'Compile dna from dna.c (replaces prebuilt inside APK)'
         type: boolean
         default: true
+      superchunk_from_source:
+        description: 'Build superchunk helpers from source (replaces prebuilts inside APK)'
+        type: boolean
+        default: true
+      upload_to_telegram:
+        description: 'Upload the signed release APK to Telegram'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -18,6 +26,9 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.appversion.outputs.version }}
+      signed: ${{ steps.signing.outputs.enabled }}
 
     steps:
       - name: Checkout repository
@@ -58,7 +69,7 @@ jobs:
           sdkmanager "platforms;android-28" "build-tools;28.0.3" "build-tools;34.0.0" "platform-tools"
 
       - name: Install Android NDK
-        if: ${{ inputs.dna_from_source }}
+        if: ${{ inputs.dna_from_source || inputs.superchunk_from_source }}
         env:
           JAVA_HOME: ${{ env.JAVA_HOME_17_X64 }}
         run: sdkmanager "ndk;21.4.7075529"
@@ -81,7 +92,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          ./gradlew :pio:assembleDebug -PdnaFromSource=${{ inputs.dna_from_source }} --stacktrace 2>&1 | tee release_build.log
+          ./gradlew :pio:assembleDebug -PdnaFromSource=${{ inputs.dna_from_source }} -PsuperchunkFromSource=${{ inputs.superchunk_from_source }} --stacktrace 2>&1 | tee release_build.log
 
       - name: Check for signing secrets
         id: signing
@@ -164,3 +175,12 @@ jobs:
           generate_release_notes: true
           prerelease: false
           files: DNA-${{ steps.appversion.outputs.version }}-release-signed.apk
+
+  telegram:
+    needs: build
+    if: ${{ inputs.upload_to_telegram && needs.build.outputs.signed == 'true' }}
+    uses: ./.github/workflows/upload.yml
+    with:
+      artifact_pattern: 'DNA-*'
+      caption_title: 'DNA ${{ needs.build.outputs.version }}'
+    secrets: inherit

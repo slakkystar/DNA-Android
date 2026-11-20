@@ -1,0 +1,77 @@
+name: Upload APK to Telegram
+
+on:
+  workflow_call:
+    inputs:
+      artifact_pattern:
+        description: 'Artifact name or glob pattern to download'
+        required: false
+        default: 'DNA-*'
+        type: string
+      caption_title:
+        description: 'Title used in the Telegram caption'
+        required: false
+        default: 'DNA Build'
+        type: string
+
+jobs:
+  telegram_upload:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v5
+        with:
+          pattern: ${{ inputs.artifact_pattern }}
+          path: artifact_dir
+          merge-multiple: true
+
+      - name: Send APK to Telegram
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${TELEGRAM_TOKEN:-}" ] || [ -z "${TELEGRAM_CHAT_ID:-}" ]; then
+            echo "Telegram secrets are not configured. Skipping upload."
+            exit 0
+          fi
+
+          mapfile -t APKS < <(find artifact_dir -type f -name '*.apk' | sort)
+          if [ ${#APKS[@]} -eq 0 ]; then
+            echo "No APK found in downloaded artifacts. Skipping upload."
+            exit 0
+          fi
+
+          APK=""
+          for f in "${APKS[@]}"; do
+            case "$(basename "$f")" in
+              *-signed*.apk) APK="$f"; break ;;
+            esac
+          done
+          if [ -z "$APK" ]; then
+            for f in "${APKS[@]}"; do
+              case "$(basename "$f")" in
+                *release*.apk) APK="$f"; break ;;
+              esac
+            done
+          fi
+          if [ -z "$APK" ]; then
+            APK="${APKS[0]}"
+          fi
+
+          DATE=$(date -u +"%d.%m.%Y %H:%M UTC")
+          SIZE=$(du -m "$APK" | cut -f1)
+          MD5=$(md5sum "$APK" | awk '{print $1}')
+          NAME=$(basename "$APK")
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          CAPTION=$(printf '%s\n\n<b>File:</b> <code>%s</code>\n<b>Date:</b> %s\n<b>Size:</b> %s MB\n<b>MD5:</b> <code>%s</code>\n<b>Run:</b> %s' \
+            "${{ inputs.caption_title }}" "$NAME" "$DATE" "$SIZE" "$MD5" "$RUN_URL")
+
+          curl --fail --silent --show-error --retry 3 --retry-delay 2 \
+            -F document=@"$APK" \
+            -F chat_id="$TELEGRAM_CHAT_ID" \
+            -F caption="$CAPTION" \
+            -F parse_mode="HTML" \
+            "https://api.telegram.org/bot$TELEGRAM_TOKEN/sendDocument"

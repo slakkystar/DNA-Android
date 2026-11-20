@@ -3,8 +3,14 @@ apply plugin: 'kotlin-android'
 apply plugin: 'kotlin-android-extensions'
 
 def dnaFromSource = (project.findProperty("dnaFromSource") ?: "false").toString().toBoolean()
+def superchunkFromSource = (project.findProperty("superchunkFromSource") ?: "false").toString().toBoolean()
 def dnaAssetsDir = new File(buildDir, "generated/dnaAssets")
 def dnaSourceFile = file("src/main/assets/tools/dna.c")
+def superchunkSources = [
+    merge_superchunk: file("src/main/assets/tools/merge_superchunk.sh"),
+    seprate_superchunk: file("src/main/assets/tools/seprate_superchunk.sh"),
+    chunk_split: file("src/main/assets/tools/chunk_split.c")
+]
 
 android {
     compileSdkVersion 28
@@ -14,8 +20,8 @@ android {
         resConfigs "zh"
         minSdkVersion 21
         targetSdkVersion 28
-        versionCode 202111142
-        versionName "2.8.0-EN"
+        versionCode 202111143
+        versionName "2.9.0-EN"
     }
     buildTypes {
         release {
@@ -91,11 +97,13 @@ def findDnaCompiler = {
 
 task prepareDnaAssets {
     group = "build"
-    description = "Stages assets and optionally compiles dna from dna.c"
+    description = "Stages assets and optionally builds dna and superchunk helpers from source"
     def localAssets = file("src/main/assets")
     inputs.dir(localAssets)
     inputs.file(dnaSourceFile)
+    superchunkSources.each { name, source -> inputs.file(source) }
     inputs.property("dnaFromSource", dnaFromSource)
+    inputs.property("superchunkFromSource", superchunkFromSource)
     inputs.property("dnaCc", project.findProperty("dnaCc") ?: "")
     inputs.property("dnaNdk", project.findProperty("dnaNdk") ?: "")
     outputs.dir(dnaAssetsDir)
@@ -106,13 +114,21 @@ task prepareDnaAssets {
             from(localAssets)
             into(dnaAssetsDir)
             exclude("tools/dna.c")
+            exclude("tools/merge_superchunk.sh")
+            exclude("tools/seprate_superchunk.sh")
+            exclude("tools/chunk_split.c")
         }
+
+        def compiler = null
+        if (dnaFromSource || superchunkFromSource) {
+            compiler = findDnaCompiler()
+            if (compiler == null) {
+                throw new GradleException("Source build requested, but no Android NDK compiler was found. Install the NDK or pass -PdnaCc=/path/to/aarch64-linux-android21-clang")
+            }
+        }
+
         def stagedBinary = new File(dnaAssetsDir, "tools/dna")
         if (dnaFromSource) {
-            def compiler = findDnaCompiler()
-            if (compiler == null) {
-                throw new GradleException("dnaFromSource=true, but no Android NDK compiler was found. Install the NDK or pass -PdnaCc=/path/to/aarch64-linux-android21-clang")
-            }
             delete stagedBinary
             stagedBinary.parentFile.mkdirs()
             exec {
@@ -125,6 +141,37 @@ task prepareDnaAssets {
             logger.lifecycle("dna: built ${stagedBinary} from ${dnaSourceFile.name}")
         } else {
             logger.lifecycle("dna: using prebuilt ${stagedBinary}")
+        }
+
+        def toolsDir = new File(dnaAssetsDir, "tools")
+        def stagedMerge = new File(toolsDir, "merge_superchunk")
+        def stagedSeprate = new File(toolsDir, "seprate_superchunk")
+        def stagedChunkSplit = new File(toolsDir, "chunk_split")
+        if (superchunkFromSource) {
+            delete stagedMerge, stagedSeprate, stagedChunkSplit
+            toolsDir.mkdirs()
+            exec {
+                commandLine compiler.absolutePath, "-O2", "-Wall", "-Wextra", "-fPIE", "-pie", "-o", stagedChunkSplit.absolutePath, superchunkSources.chunk_split.absolutePath
+            }
+            if (!stagedChunkSplit.isFile()) {
+                throw new GradleException("chunk_split compilation did not produce ${stagedChunkSplit}")
+            }
+            stagedChunkSplit.setExecutable(true, false)
+            copy {
+                from(superchunkSources.merge_superchunk)
+                into(toolsDir)
+                rename { "merge_superchunk" }
+            }
+            copy {
+                from(superchunkSources.seprate_superchunk)
+                into(toolsDir)
+                rename { "seprate_superchunk" }
+            }
+            stagedMerge.setExecutable(true, false)
+            stagedSeprate.setExecutable(true, false)
+            logger.lifecycle("superchunk: built merge_superchunk, seprate_superchunk and chunk_split from source")
+        } else {
+            logger.lifecycle("superchunk: using prebuilt merge_superchunk, seprate_superchunk and chunk_split")
         }
     }
 }

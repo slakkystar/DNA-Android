@@ -71,6 +71,21 @@ changed inside the staged build assets. An Android NDK is required for this mode
 Alternatively pass `-PdnaCc=/path/to/aarch64-linux-android-clang` or put such a
 compiler on `PATH` (for example, a Termux Android clang wrapper).
 
+To build the superchunk helpers from source instead of using the prebuilt
+`merge_superchunk`, `seprate_superchunk` and `chunk_split`:
+
+```bash
+./gradlew assembleRelease -PsuperchunkFromSource=true
+```
+
+This stages `merge_superchunk.sh` and `seprate_superchunk.sh` as executable
+helpers and compiles `chunk_split.c` into `chunk_split`. The source files are
+not packaged in either mode. Without the flag the prebuilt binaries are used.
+
+The GitHub Actions workflows expose `dna_from_source`, `superchunk_from_source`
+and `upload_to_telegram` inputs. Telegram upload requires the `TELEGRAM_TOKEN`
+and `TELEGRAM_CHAT_ID` secrets and prefers the signed APK when one is built.
+
 ## 📄 License
 
 See the `LICENSE` file in the repository root.
