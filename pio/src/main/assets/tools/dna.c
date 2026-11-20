@@ -582,7 +582,6 @@ static int extract_ext(const char *img, const char *dro, const char *pname) {
         FILE *fi = fopen(p4, "wb");
         if (fi) { fprintf(fi, "%llu\n", (unsigned long long)(e.nblocks * e.bs)); fclose(fi); }
     }
-    printf("> Extracted %llu entries to %s\n", (unsigned long long)e.nfiles, e.outroot);
     for (size_t i = 0; i < e.nseen; i++) free(e.seen_path[i]);
     free(e.seen_ino); free(e.seen_path); free(e.gdt); img_close(&im);
     return rc;
@@ -644,12 +643,16 @@ static int copy_file(const char *src, const char *dst) {
     return rc;
 }
 
+static const char *fs_label(const char *t) {
+    return !strcmp(t, "ext") ? "ext4" : t;
+}
+
 static int extract_raw_by_type(const char *img, const char *name, const char *pname, const char *dro) {
     const char *t = detect_type(img);
     char dest[4400];
-    if (!strcmp(t, "ext")) { printf("> ext4 detected: %s\n", name); return extract_ext(img, dro, pname); }
+    (void)name;
+    if (!strcmp(t, "ext")) return extract_ext(img, dro, pname);
     if (!strcmp(t, "erofs")) {
-        printf("> erofs detected: %s\n", name);
         /* extract.erofs derives the partition name from the file name: give it a clean one */
         char lnk[4400]; snprintf(lnk, sizeof lnk, "%s/dna_%d_%s.img", tmp_dir(), (int)getpid(), pname);
         char dd[4400]; snprintf(dd, sizeof dd, "%s/dna_%d", tmp_dir(), (int)getpid()); mkdir_p(dd);
@@ -664,13 +667,11 @@ static int extract_raw_by_type(const char *img, const char *name, const char *pn
         return rc;
     }
     if (!strcmp(t, "f2fs")) {
-        printf("> f2fs detected: %s\n", name);
         snprintf(dest, sizeof dest, "%s/%s", dro, pname); mkdir_p(dest);
         char *a[] = { "extract.f2fs", (char *)img, dest, NULL };
         return run(a);
     }
     if (!strcmp(t, "boot") || !strcmp(t, "vendor_boot")) {
-        printf("> %s detected: %s\n", t, name);
         snprintf(dest, sizeof dest, "%s/%s", dro, pname); mkdir_p(dest);
         char abs[4400];
         if (img[0] == '/') snprintf(abs, sizeof abs, "%s", img);
@@ -700,6 +701,7 @@ static int extract_one(const char *path, int *deleted_src, int auto_unpack) {
     char name[512], pname[512];
     base_name(full, name, sizeof name); part_name(full, pname, sizeof pname);
     size_t fl = strlen(full); *deleted_src = 0;
+    int is_img = fl > 4 && !strcmp(full + fl - 4, ".img");
     int rc;
 
     if (fl > 3 && !strcmp(full + fl - 3, ".br")) {                       /* x.new.dat.br -> x.new.dat -> x.img */
@@ -723,18 +725,23 @@ static int extract_one(const char *path, int *deleted_src, int auto_unpack) {
     if (auto_unpack) { la[n++] = "--auto"; la[n++] = "1"; }
     la[n] = NULL;
     const char *t = detect_type(full);
-    if (!strcmp(t, "super")) return cmd_lpunpack(n, la);
-    if (!strcmp(t, "sparse")) {
-        { img_t pi; lp_t pl; int is_super = !img_open(&pi, full) && !lp_load(&pi, &pl); img_close(&pi);
-          if (is_super) return cmd_lpunpack(n, la); }
-        char raw[4400]; snprintf(raw, sizeof raw, "%s/dna_%d_%s.raw", tmp_dir(), (int)getpid(), name);
-        printf("> Converting sparse to raw: %s\n", name); fflush(stdout);
-        if (sparse_to_raw(full, raw)) { fprintf(stderr, "> Error: sparse conversion failed\n"); return 1; }
-        rc = extract_raw_by_type(raw, name, pname, dro);
-        remove(raw);
-        return rc;
+    if (is_img) {
+        const char *fn = strrchr(full, '/'); fn = fn ? fn + 1 : full;
+        printf("Unpacking: %s (%s)\n", fn, fs_label(t)); fflush(stdout);
     }
-    return extract_raw_by_type(full, name, pname, dro);
+    if (!strcmp(t, "super")) rc = cmd_lpunpack(n, la);
+    else if (!strcmp(t, "sparse")) {
+        img_t pi; lp_t pl; int is_super = !img_open(&pi, full) && !lp_load(&pi, &pl); img_close(&pi);
+        if (is_super) rc = cmd_lpunpack(n, la);
+        else {
+            char raw[4400]; snprintf(raw, sizeof raw, "%s/dna_%d_%s.raw", tmp_dir(), (int)getpid(), name);
+            printf("> Converting sparse to raw: %s\n", name); fflush(stdout);
+            if (sparse_to_raw(full, raw)) { fprintf(stderr, "> Error: sparse conversion failed\n"); rc = 1; }
+            else { rc = extract_raw_by_type(raw, name, pname, dro); remove(raw); }
+        }
+    } else rc = extract_raw_by_type(full, name, pname, dro);
+    if (!rc && is_img) printf("Unpacked successfully %s\n", pname);
+    return rc;
 }
 
 static int cmd_extract(int argc, char **argv) {
@@ -751,10 +758,12 @@ static int cmd_extract(int argc, char **argv) {
     if (!nf) { fprintf(stderr, "usage: dna extract <files...> [--delete 0|1] [--auto 0|1]\n"); return 2; }
     for (int i = 0; i < nf; i++) {
         int d; any = 1;
-        printf("> Unpacking: %s\n", files[i]); fflush(stdout);
+        size_t nl = strlen(files[i]);
+        int is_img = nl > 4 && !strcmp(files[i] + nl - 4, ".img");
+        if (!is_img) { printf("> Unpacking: %s\n", files[i]); fflush(stdout); }
         int rc = extract_one(files[i], &d, autox);
         if (rc) { fprintf(stderr, "> Failed: %s\n", files[i]); fail = 1; continue; }
-        printf("> Done: %s\n", files[i]);
+        if (!is_img) printf("> Done: %s\n", files[i]);
         if (del) {
             char full[4400]; snprintf(full, sizeof full, "%s", files[i]);
             if (access(full, F_OK) && getenv("DNA_PRO")) snprintf(full, sizeof full, "%s/%s", getenv("DNA_PRO"), files[i]);
