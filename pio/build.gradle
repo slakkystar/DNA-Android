@@ -4,8 +4,10 @@ apply plugin: 'kotlin-android-extensions'
 
 def dnaFromSource = (project.findProperty("dnaFromSource") ?: "false").toString().toBoolean()
 def superchunkFromSource = (project.findProperty("superchunkFromSource") ?: "false").toString().toBoolean()
+def f2fsClean = (project.findProperty("f2fsClean") ?: "false").toString().toBoolean()
 def dnaAssetsDir = new File(buildDir, "generated/dnaAssets")
 def dnaSourceFile = file("src/main/assets/tools/dna.c")
+def f2fsToolSources = file("src/main/assets/tools-f2fs")
 def superchunkSources = [
     merge_superchunk: file("src/main/assets/tools/merge_superchunk.sh"),
     seprate_superchunk: file("src/main/assets/tools/seprate_superchunk.sh"),
@@ -102,8 +104,10 @@ task prepareDnaAssets {
     inputs.dir(localAssets)
     inputs.file(dnaSourceFile)
     superchunkSources.each { name, source -> inputs.file(source) }
+    inputs.dir(f2fsToolSources)
     inputs.property("dnaFromSource", dnaFromSource)
     inputs.property("superchunkFromSource", superchunkFromSource)
+    inputs.property("f2fsClean", f2fsClean)
     inputs.property("dnaCc", project.findProperty("dnaCc") ?: "")
     inputs.property("dnaNdk", project.findProperty("dnaNdk") ?: "")
     outputs.dir(dnaAssetsDir)
@@ -117,6 +121,7 @@ task prepareDnaAssets {
             exclude("tools/merge_superchunk.sh")
             exclude("tools/seprate_superchunk.sh")
             exclude("tools/chunk_split.c")
+            exclude("tools-f2fs/**")
         }
 
         def compiler = null
@@ -172,6 +177,23 @@ task prepareDnaAssets {
             logger.lifecycle("superchunk: built merge_superchunk, seprate_superchunk and chunk_split from source")
         } else {
             logger.lifecycle("superchunk: using prebuilt merge_superchunk, seprate_superchunk and chunk_split")
+        }
+
+        if (f2fsClean) {
+            copy {
+                from(f2fsToolSources)
+                into(toolsDir)
+            }
+            ["extract.f2fs", "f2fs-extractor", "sload_f2fs"].each { name ->
+                def tool = new File(toolsDir, name)
+                if (!tool.isFile()) {
+                    throw new GradleException("Clean f2fs tool missing: ${tool}")
+                }
+                tool.setExecutable(true, false)
+            }
+            logger.lifecycle("f2fs: using clean extract.f2fs and sload_f2fs from ${f2fsToolSources.name}")
+        } else {
+            logger.lifecycle("f2fs: using bundled extract.f2fs and sload_f2fs")
         }
     }
 }

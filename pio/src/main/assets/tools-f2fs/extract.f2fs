@@ -1,0 +1,4 @@
+#!/system/bin/sh
+DIR=${0%/*}
+[ "$DIR" = "$0" ] && DIR=.
+exec "$DIR/f2fs-extractor" extract "$1" "$2"

@@ -15,6 +15,10 @@ on:
         description: 'Build superchunk helpers from source (replaces prebuilts inside APK)'
         type: boolean
         default: true
+      f2fs_clean:
+        description: 'Use clean universal f2fs helpers inside APK'
+        type: boolean
+        default: true
       upload_to_telegram:
         description: 'Upload the signed release APK to Telegram'
         type: boolean
@@ -92,7 +96,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          ./gradlew :pio:assembleDebug -PdnaFromSource=${{ inputs.dna_from_source }} -PsuperchunkFromSource=${{ inputs.superchunk_from_source }} --stacktrace 2>&1 | tee release_build.log
+          ./gradlew :pio:assembleDebug -PdnaFromSource=${{ inputs.dna_from_source }} -PsuperchunkFromSource=${{ inputs.superchunk_from_source }} -Pf2fsClean=${{ inputs.f2fs_clean }} --stacktrace 2>&1 | tee release_build.log
 
       - name: Check for signing secrets
         id: signing

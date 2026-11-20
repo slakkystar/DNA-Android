@@ -82,9 +82,22 @@ This stages `merge_superchunk.sh` and `seprate_superchunk.sh` as executable
 helpers and compiles `chunk_split.c` into `chunk_split`. The source files are
 not packaged in either mode. Without the flag the prebuilt binaries are used.
 
-The GitHub Actions workflows expose `dna_from_source`, `superchunk_from_source`
-and `upload_to_telegram` inputs. Telegram upload requires the `TELEGRAM_TOKEN`
-and `TELEGRAM_CHAT_ID` secrets and prefers the signed APK when one is built.
+To replace the bundled f2fs helpers with clean universal builds inside the APK:
+
+```bash
+./gradlew assembleRelease -Pf2fsClean=true
+```
+
+This stages `assets/tools-f2fs` over `assets/tools`: a clean `extract.f2fs`
+wrapper backed by the static `f2fs-extractor`, and an AOSP `sload_f2fs` with
+its shared libraries bundled via `$ORIGIN`. The original assets are not
+modified. The clean extractor handles uncompressed f2fs images; the bundled
+extractor remains available when `f2fsClean` is not enabled.
+
+The GitHub Actions workflows expose `dna_from_source`, `superchunk_from_source`,
+`f2fs_clean` and `upload_to_telegram` inputs. Telegram upload requires the
+`TELEGRAM_TOKEN` and `TELEGRAM_CHAT_ID` secrets and prefers the signed APK when
+one is built.
 
 ## 📄 License
 
