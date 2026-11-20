@@ -284,6 +284,19 @@ static int run(char *const argv[]) {
     return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
 }
 
+/* Same as run(), but hides the tool's stdout (progress/banner). stderr stays visible. */
+static int run_quiet(char *const argv[]) {
+    pid_t p = fork();
+    if (p < 0) return -1;
+    if (p == 0) {
+        int fd = open("/dev/null", O_WRONLY);
+        if (fd >= 0) { dup2(fd, STDOUT_FILENO); if (fd != STDOUT_FILENO) close(fd); }
+        execvp(argv[0], argv); fprintf(stderr, "> Error: cannot run %s: %s\n", argv[0], strerror(errno)); _exit(127);
+    }
+    int st; waitpid(p, &st, 0);
+    return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
+}
+
 static int mkdir_p(const char *path) {
     char t[4096]; snprintf(t, sizeof t, "%s", path);
     for (char *s = t + 1; *s; s++) if (*s == '/') { *s = 0; mkdir(t, 0755); *s = '/'; }
@@ -646,7 +659,7 @@ static int extract_raw_by_type(const char *img, const char *name, const char *pn
         else { char cwd[2048]; if (!getcwd(cwd, sizeof cwd)) return -1; snprintf(abs, sizeof abs, "%s/%s", cwd, img); }
         unlink(lnk); if (symlink(abs, lnk)) return -1;
         char *a[] = { "extract.erofs", "-i", lnk, "-x", "-f", "-s", "-o", (char *)dro, NULL };
-        int rc = run(a);
+        int rc = run_quiet(a);
         unlink(lnk); rmdir(dd);
         return rc;
     }
