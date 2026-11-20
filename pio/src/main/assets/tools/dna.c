@@ -740,7 +740,7 @@ static int extract_one(const char *path, int *deleted_src, int auto_unpack) {
             else { rc = extract_raw_by_type(raw, name, pname, dro); remove(raw); }
         }
     } else rc = extract_raw_by_type(full, name, pname, dro);
-    if (!rc && is_img) printf("Unpacked successfully %s\n", pname);
+    if (!rc && is_img) printf("%s unpacked successfully\n", pname);
     return rc;
 }
 
