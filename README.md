@@ -59,6 +59,16 @@ cd DNA-Android
 
 The built APK will be located at `pio/build/outputs/apk/release/`.
 
+By default the prebuilt `assets/tools/dna` is packaged. To compile it from
+`assets/tools/dna.c` and omit the source from the APK:
+
+```bash
+./gradlew assembleRelease -PdnaFromSource=true
+```
+
+The repository keeps both the prebuilt binary and the source; they are only
+changed inside the staged build assets. An Android NDK is required for this mode.
+
 ## 📄 License
 
 See the `LICENSE` file in the repository root.

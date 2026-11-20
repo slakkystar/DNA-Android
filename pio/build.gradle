@@ -2,6 +2,10 @@ apply plugin: 'com.android.application'
 apply plugin: 'kotlin-android'
 apply plugin: 'kotlin-android-extensions'
 
+def dnaFromSource = (project.findProperty("dnaFromSource") ?: "false").toString().toBoolean()
+def dnaAssetsDir = new File(buildDir, "generated/dnaAssets")
+def dnaSourceFile = file("src/main/assets/tools/dna.c")
+
 android {
     compileSdkVersion 28
     buildToolsVersion '28.0.3'
@@ -10,8 +14,8 @@ android {
         resConfigs "zh"
         minSdkVersion 21
         targetSdkVersion 28
-        versionCode 202111141
-        versionName "2.7.0-EN"
+        versionCode 202111142
+        versionName "2.8.0-EN"
     }
     buildTypes {
         release {
@@ -22,6 +26,105 @@ android {
             minifyEnabled = true
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
+    }
+
+    // Package a staged copy of the assets instead of src/main/assets directly.
+    // This lets the build replace the prebuilt dna binary and drop dna.c from the APK.
+    sourceSets {
+        main {
+            assets.srcDirs = [dnaAssetsDir]
+        }
+    }
+}
+
+def readLocalProperties = {
+    def props = new Properties()
+    def f = rootProject.file("local.properties")
+    if (f.exists()) {
+        f.withInputStream { props.load(it) }
+    }
+    props
+}
+
+def findNdk = {
+    def explicit = project.findProperty("dnaNdk")
+    if (explicit) return file(explicit)
+    def fromEnv = System.getenv("ANDROID_NDK_HOME") ?: System.getenv("ANDROID_NDK_ROOT")
+    if (fromEnv) return file(fromEnv)
+    def props = readLocalProperties()
+    if (props.getProperty("ndk.dir")) return file(props.getProperty("ndk.dir"))
+    def sdk = System.getenv("ANDROID_HOME") ?: System.getenv("ANDROID_SDK_ROOT") ?: props.getProperty("sdk.dir")
+    if (sdk) {
+        def ndkRoot = new File(sdk, "ndk")
+        def dirs = ndkRoot.listFiles()?.findAll { it.isDirectory() }
+        if (dirs) return dirs.sort { it.name }.last()
+    }
+    null
+}
+
+def findDnaCompiler = {
+    def explicit = project.findProperty("dnaCc")
+    if (explicit) return file(explicit)
+    def ndk = findNdk()
+    if (ndk == null) return null
+    def os = System.getProperty("os.name").toLowerCase()
+    def hosts = os.contains("windows") ? ["windows-x86_64"] : (os.contains("mac") ? ["darwin-x86_64", "darwin-aarch64"] : ["linux-x86_64", "linux-aarch64"])
+    def names = ["aarch64-linux-android21-clang", "aarch64-linux-android23-clang", "aarch64-linux-android-clang"]
+    for (host in hosts) {
+        def bin = new File(ndk, "toolchains/llvm/prebuilt/${host}/bin")
+        for (name in names) {
+            def c = new File(bin, name)
+            if (c.isFile()) return c
+        }
+        def found = bin.listFiles()?.find { it.isFile() && it.name ==~ /aarch64-linux-android\d+-clang/ }
+        if (found) return found
+    }
+    null
+}
+
+task prepareDnaAssets {
+    group = "build"
+    description = "Stages assets and optionally compiles dna from dna.c"
+    def localAssets = file("src/main/assets")
+    inputs.dir(localAssets)
+    inputs.file(dnaSourceFile)
+    inputs.property("dnaFromSource", dnaFromSource)
+    inputs.property("dnaCc", project.findProperty("dnaCc") ?: "")
+    inputs.property("dnaNdk", project.findProperty("dnaNdk") ?: "")
+    outputs.dir(dnaAssetsDir)
+
+    doLast {
+        delete dnaAssetsDir
+        copy {
+            from(localAssets)
+            into(dnaAssetsDir)
+            exclude("tools/dna.c")
+        }
+        def stagedBinary = new File(dnaAssetsDir, "tools/dna")
+        if (dnaFromSource) {
+            def compiler = findDnaCompiler()
+            if (compiler == null) {
+                throw new GradleException("dnaFromSource=true, but no Android NDK compiler was found. Install the NDK or pass -PdnaCc=/path/to/aarch64-linux-android21-clang")
+            }
+            delete stagedBinary
+            stagedBinary.parentFile.mkdirs()
+            exec {
+                commandLine compiler.absolutePath, "-O2", "-Wall", "-Wextra", "-fPIE", "-pie", "-o", stagedBinary.absolutePath, dnaSourceFile.absolutePath
+            }
+            if (!stagedBinary.isFile()) {
+                throw new GradleException("dna compilation did not produce ${stagedBinary}")
+            }
+            stagedBinary.setExecutable(true, false)
+            logger.lifecycle("dna: built ${stagedBinary} from ${dnaSourceFile.name}")
+        } else {
+            logger.lifecycle("dna: using prebuilt ${stagedBinary}")
+        }
+    }
+}
+
+afterEvaluate {
+    tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.all { task ->
+        task.dependsOn prepareDnaAssets
     }
 }
 
