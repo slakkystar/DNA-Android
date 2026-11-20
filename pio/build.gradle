@@ -65,19 +65,26 @@ def findNdk = {
 def findDnaCompiler = {
     def explicit = project.findProperty("dnaCc")
     if (explicit) return file(explicit)
-    def ndk = findNdk()
-    if (ndk == null) return null
-    def os = System.getProperty("os.name").toLowerCase()
-    def hosts = os.contains("windows") ? ["windows-x86_64"] : (os.contains("mac") ? ["darwin-x86_64", "darwin-aarch64"] : ["linux-x86_64", "linux-aarch64"])
     def names = ["aarch64-linux-android21-clang", "aarch64-linux-android23-clang", "aarch64-linux-android-clang"]
-    for (host in hosts) {
-        def bin = new File(ndk, "toolchains/llvm/prebuilt/${host}/bin")
-        for (name in names) {
-            def c = new File(bin, name)
-            if (c.isFile()) return c
+    def ndk = findNdk()
+    if (ndk != null) {
+        def os = System.getProperty("os.name").toLowerCase()
+        def hosts = os.contains("windows") ? ["windows-x86_64"] : (os.contains("mac") ? ["darwin-x86_64", "darwin-aarch64"] : ["linux-x86_64", "linux-aarch64"])
+        for (host in hosts) {
+            def bin = new File(ndk, "toolchains/llvm/prebuilt/${host}/bin")
+            for (name in names) {
+                def c = new File(bin, name)
+                if (c.isFile()) return c
+            }
+            def found = bin.listFiles()?.find { it.isFile() && it.name ==~ /aarch64-linux-android\d+-clang/ }
+            if (found) return found
         }
-        def found = bin.listFiles()?.find { it.isFile() && it.name ==~ /aarch64-linux-android\d+-clang/ }
-        if (found) return found
+    }
+    for (dir in (System.getenv("PATH") ?: "").split(File.pathSeparator)) {
+        for (name in names) {
+            def c = new File(dir, name)
+            if (c.isFile() && c.canExecute()) return c
+        }
     }
     null
 }
