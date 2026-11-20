@@ -16,8 +16,10 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <poll.h>
+#include <signal.h>
 
-#define VERSION "0.4"
+#define VERSION "1.0"
 
 /* ---------- format detection ---------- */
 
@@ -206,6 +208,8 @@ static int slot_pick(const char *mode, const char *name, char *out, size_t n) {
     return 1;
 }
 
+static int extract_one(const char *path, int *deleted_src, int auto_unpack);
+
 static int cmd_lpunpack(int argc, char **argv) {
     const char *parts = NULL, *file = NULL;
     int list = 0, del = 0, autox = 0; const char *slot = "none";
@@ -233,7 +237,7 @@ static int cmd_lpunpack(int argc, char **argv) {
     char dir[4096]; snprintf(dir, sizeof dir, "%s", file);
     char *sl = strrchr(dir, '/'); if (sl) *sl = 0; else strcpy(dir, ".");
 
-    int rc = 0, done = 0;
+    int rc = 0, done = 0, auto_fail = 0;
     uint8_t *buf = malloc(1 << 20);
     for (size_t i = 0; i < lp.np; i++) {
         part_t *p = &lp.p[i];
@@ -257,12 +261,16 @@ static int cmd_lpunpack(int argc, char **argv) {
         fclose(o);
         if (rc) { remove(out); break; }
         printf("> Done: %s\n", out); done++;
+        if (autox) {
+            int d = 0;
+            printf("> Auto-unpacking: %s\n", dn); fflush(stdout);
+            if (extract_one(out, &d, 0)) { fprintf(stderr, "> Warning: auto-unpack failed: %s\n", out); auto_fail = 1; }
+        }
     }
     free(buf); img_close(&im);
     if (!rc && !done) { fprintf(stderr, "> Error: no matching partitions\n"); rc = 1; }
-    if (!rc && autox) printf("> Note: --auto unpack of images is not implemented yet\n");
     if (!rc && del) { printf("> Deleting: %s\n", file); remove(file); }
-    return rc;
+    return rc ? rc : auto_fail;
 }
 
 
@@ -610,7 +618,7 @@ static int dat_to_img(const char *dat, char *outimg, size_t on) {
 
 /* ---------- extract command ---------- */
 
-static int extract_one(const char *path, int *deleted_src);
+static int extract_one(const char *path, int *deleted_src, int auto_unpack);
 
 static int copy_file(const char *src, const char *dst) {
     FILE *a = fopen(src, "rb"); if (!a) return -1;
@@ -670,7 +678,7 @@ static int extract_raw_by_type(const char *img, const char *name, const char *pn
     return 1;
 }
 
-static int extract_one(const char *path, int *deleted_src) {
+static int extract_one(const char *path, int *deleted_src, int auto_unpack) {
     const char *dro = getenv("DNA_DRO");
     if (!dro || !*dro) { fprintf(stderr, "> Error: project is not selected (DNA_DRO is empty)\n"); return 1; }
     char full[4400]; snprintf(full, sizeof full, "%s", path);
@@ -697,11 +705,15 @@ static int extract_one(const char *path, int *deleted_src) {
         return rc;
     }
 
+    char *la[4]; int n = 0;
+    la[n++] = (char *)full;
+    if (auto_unpack) { la[n++] = "--auto"; la[n++] = "1"; }
+    la[n] = NULL;
     const char *t = detect_type(full);
-    if (!strcmp(t, "super")) return cmd_lpunpack(1, (char *[]){ full, NULL });
+    if (!strcmp(t, "super")) return cmd_lpunpack(n, la);
     if (!strcmp(t, "sparse")) {
         { img_t pi; lp_t pl; int is_super = !img_open(&pi, full) && !lp_load(&pi, &pl); img_close(&pi);
-          if (is_super) return cmd_lpunpack(1, (char *[]){ full, NULL }); }
+          if (is_super) return cmd_lpunpack(n, la); }
         char raw[4400]; snprintf(raw, sizeof raw, "%s/dna_%d_%s.raw", tmp_dir(), (int)getpid(), name);
         printf("> Converting sparse to raw: %s\n", name); fflush(stdout);
         if (sparse_to_raw(full, raw)) { fprintf(stderr, "> Error: sparse conversion failed\n"); return 1; }
@@ -713,20 +725,21 @@ static int extract_one(const char *path, int *deleted_src) {
 }
 
 static int cmd_extract(int argc, char **argv) {
-    int del = 0, any = 0, fail = 0;
+    int del = 0, autox = 0, any = 0, fail = 0;
     char *files[256]; int nf = 0;
     for (int i = 0; i < argc; i++) {
         if (!strcmp(argv[i], "--delete")) del = flag_val(argc, argv, &i);
+        else if (!strcmp(argv[i], "--auto")) autox = flag_val(argc, argv, &i);
         else if (argv[i][0] == '-') continue;
         else {
             for (char *tok = strtok(argv[i], ", \t\n"); tok && nf < 256; tok = strtok(NULL, ", \t\n")) files[nf++] = tok;
         }
     }
-    if (!nf) { fprintf(stderr, "usage: dna extract <files...> [--delete 0|1]\n"); return 2; }
+    if (!nf) { fprintf(stderr, "usage: dna extract <files...> [--delete 0|1] [--auto 0|1]\n"); return 2; }
     for (int i = 0; i < nf; i++) {
         int d; any = 1;
         printf("> Unpacking: %s\n", files[i]); fflush(stdout);
-        int rc = extract_one(files[i], &d);
+        int rc = extract_one(files[i], &d, autox);
         if (rc) { fprintf(stderr, "> Failed: %s\n", files[i]); fail = 1; continue; }
         printf("> Done: %s\n", files[i]);
         if (del) {
@@ -1092,6 +1105,49 @@ static int repack_erofs(const char *name, const char *dro, const char *pro, cons
     return 0;
 }
 
+static int repack_f2fs(const char *name, const char *dro, const char *pro, const ropts_t *o) {
+    char tree[4400], fso[4600], inf[4600], final[4600], raw[4700], lbl[64], uuid[64] = "";
+    snprintf(tree, sizeof tree, "%s/%s", dro, name);
+    snprintf(fso, sizeof fso, "%s/config/%s_fs_options", dro, name);
+    snprintf(inf, sizeof inf, "%s/config/%s_info", dro, name);
+    snprintf(final, sizeof final, "%s/out/%s.img", pro, name);
+    snprintf(raw, sizeof raw, "%s.tmp", final);
+    snprintf(lbl, sizeof lbl, "%.15s", name);
+    read_opt(fso, "uuid", uuid, sizeof uuid);
+
+    uint64_t bytes = 0;
+    if (!o->autosize) {
+        bytes = read_u64_file(inf);
+        if (bytes < (64u << 20)) bytes = 0;
+    }
+    if (!bytes) {
+        tstat_t st = {0, 0}; tree_stat(tree, &st, 0);
+        bytes = st.blocks * 4096;
+        bytes = bytes * 115 / 100 + (64u << 20);
+    }
+    bytes = (bytes + 4095) & ~4095ull;
+    if (bytes < (64u << 20)) bytes = 64u << 20;
+
+    printf("> Building f2fs: %s, %llu MiB\n", name, (unsigned long long)(bytes >> 20)); fflush(stdout);
+    remove(raw);
+    FILE *z = fopen(raw, "wb");
+    if (!z) { fprintf(stderr, "> Error: cannot create %s\n", raw); return 1; }
+    if (ftruncate(fileno(z), (off_t)bytes)) { fclose(z); fprintf(stderr, "> Error: not enough space\n"); remove(raw); return 1; }
+    fclose(z);
+
+    char *mk[16]; int k = 0;
+    mk[k++] = "mkfs.f2fs"; mk[k++] = "-f"; mk[k++] = "-l"; mk[k++] = lbl;
+    if (uuid[0]) { mk[k++] = "-U"; mk[k++] = uuid; }
+    mk[k++] = raw; mk[k] = NULL;
+    if (run(mk)) { fprintf(stderr, "> Error: mkfs.f2fs failed\n"); remove(raw); return 1; }
+
+    char *sl[] = { "sload_f2fs", "-f", tree, raw, NULL };
+    if (run(sl)) { fprintf(stderr, "> Error: sload_f2fs failed\n"); remove(raw); return 1; }
+    if (finish_output(raw, final, o)) { fprintf(stderr, "> Error: cannot write %s\n", final); return 1; }
+    if (!o->out_kind) printf("> Done: %s\n", final);
+    return 0;
+}
+
 static int repack_boot(const char *name, const char *dro, const char *pro) {
     char dir[4400], orig[4400], final[4600], cwd[2048];
     snprintf(dir, sizeof dir, "%s/%s", dro, name); snprintf(orig, sizeof orig, "%s/%s.img", dir, name);
@@ -1148,7 +1204,7 @@ static int cmd_repack(int argc, char **argv) {
         else {
             if (o.delavb) delavb_tree(tree, 0);
             if (conv == 1) rc = repack_erofs(n, dro, pro, &o);
-            else if (conv == 2) { fprintf(stderr, "> Error: f2fs repack is not implemented yet\n"); rc = 64; }
+            else if (conv == 2) rc = repack_f2fs(n, dro, pro, &o);
             else rc = repack_ext4(n, dro, pro, &o);
         }
         if (rc) { fprintf(stderr, "> Failed: %s\n", n); fail = 1; }
@@ -1434,12 +1490,435 @@ static int cmd_lpmake(int argc, char **argv) {
     return 0;
 }
 
-/* ---------- dispatcher ---------- */
+/* ---------- payload.bin dumper ---------- */
 
-static int not_yet(const char *c) {
-    fprintf(stderr, "dna: '%s' is not implemented yet\n", c);
-    return 64;
+/* update_engine payload: CrAU header + DeltaArchiveManifest (protobuf). */
+
+typedef struct { uint64_t start, blocks; } pext_t;
+typedef struct {
+    int type;
+    uint64_t data_off, data_len, dst_len;
+    pext_t *ext; uint32_t next, extcap;
+} pop_t;
+typedef struct {
+    char *name;
+    pop_t *ops; uint32_t nops, opcap;
+} ppart_t;
+typedef struct {
+    uint64_t block_size, data_start, file_size;
+    char path[4400];
+    ppart_t *parts; uint32_t nparts, partcap;
+} pay_t;
+
+static uint32_t be32(const uint8_t *p) {
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3];
 }
+static uint64_t be64(const uint8_t *p) {
+    return ((uint64_t)be32(p) << 32) | be32(p + 4);
+}
+
+static int pb_varint(const uint8_t **pp, const uint8_t *end, uint64_t *v) {
+    const uint8_t *p = *pp;
+    uint64_t r = 0; int shift = 0;
+    while (p < end && shift < 64) {
+        uint8_t b = *p++;
+        r |= (uint64_t)(b & 0x7f) << shift;
+        if (!(b & 0x80)) { *pp = p; *v = r; return 0; }
+        shift += 7;
+    }
+    return -1;
+}
+
+static int pb_skip(const uint8_t **pp, const uint8_t *end, uint32_t wire) {
+    uint64_t n;
+    const uint8_t *p = *pp;
+    if (wire == 0) { if (pb_varint(&p, end, &n)) return -1; }
+    else if (wire == 1) { if ((size_t)(end - p) < 8) return -1; p += 8; }
+    else if (wire == 2) {
+        if (pb_varint(&p, end, &n) || n > (uint64_t)(end - p)) return -1;
+        p += n;
+    } else if (wire == 5) { if ((size_t)(end - p) < 4) return -1; p += 4; }
+    else return -1;
+    *pp = p;
+    return 0;
+}
+
+static int pb_field(const uint8_t **pp, const uint8_t *end, uint64_t *field, uint32_t *wire) {
+    uint64_t key;
+    if (pb_varint(pp, end, &key)) return -1;
+    *field = key >> 3; *wire = (uint32_t)(key & 7);
+    return *field ? 0 : -1;
+}
+
+static int pext_add(pop_t *op, uint64_t start, uint64_t blocks) {
+    if (op->next == op->extcap) {
+        uint32_t nc = op->extcap ? op->extcap * 2 : 4;
+        pext_t *n = realloc(op->ext, (size_t)nc * sizeof *n);
+        if (!n) return -1;
+        op->ext = n; op->extcap = nc;
+    }
+    op->ext[op->next].start = start;
+    op->ext[op->next].blocks = blocks;
+    op->next++;
+    return 0;
+}
+
+static int pay_parse_extent(const uint8_t *p, const uint8_t *end, pop_t *op) {
+    uint64_t start = 0, blocks = 0;
+    while (p < end) {
+        uint64_t f; uint32_t w;
+        if (pb_field(&p, end, &f, &w)) return -1;
+        if (f == 1 && w == 0) { if (pb_varint(&p, end, &start)) return -1; }
+        else if (f == 2 && w == 0) { if (pb_varint(&p, end, &blocks)) return -1; }
+        else if (pb_skip(&p, end, w)) return -1;
+    }
+    return pext_add(op, start, blocks);
+}
+
+static int pay_parse_op(const uint8_t *p, const uint8_t *end, pop_t *op) {
+    op->type = -1;
+    while (p < end) {
+        uint64_t f; uint32_t w;
+        if (pb_field(&p, end, &f, &w)) return -1;
+        if (f == 1 && w == 0) { uint64_t v; if (pb_varint(&p, end, &v)) return -1; op->type = (int)v; }
+        else if (f == 2 && w == 0) { if (pb_varint(&p, end, &op->data_off)) return -1; }
+        else if (f == 3 && w == 0) { if (pb_varint(&p, end, &op->data_len)) return -1; }
+        else if (f == 6 && w == 2) {
+            uint64_t n; if (pb_varint(&p, end, &n) || n > (uint64_t)(end - p)) return -1;
+            if (pay_parse_extent(p, p + n, op)) return -1;
+            p += n;
+        }
+        else if (f == 7 && w == 0) { if (pb_varint(&p, end, &op->dst_len)) return -1; }
+        else if (pb_skip(&p, end, w)) return -1;
+    }
+    return op->type >= 0 ? 0 : -1;
+}
+
+static int pay_parse_part(const uint8_t *p, const uint8_t *end, pay_t *py) {
+    ppart_t part; memset(&part, 0, sizeof part);
+    while (p < end) {
+        uint64_t f; uint32_t w;
+        if (pb_field(&p, end, &f, &w)) goto bad;
+        if (f == 1 && w == 2) {
+            uint64_t n; if (pb_varint(&p, end, &n) || n > (uint64_t)(end - p) || n > 4095) goto bad;
+            free(part.name); part.name = malloc((size_t)n + 1);
+            if (!part.name) goto bad;
+            memcpy(part.name, p, (size_t)n); part.name[n] = 0; p += n;
+        } else if (f == 8 && w == 2) {
+            uint64_t n; if (pb_varint(&p, end, &n) || n > (uint64_t)(end - p)) goto bad;
+            if (part.nops == part.opcap) {
+                uint32_t nc = part.opcap ? part.opcap * 2 : 8;
+                pop_t *no = realloc(part.ops, (size_t)nc * sizeof *no);
+                if (!no) goto bad;
+                part.ops = no; part.opcap = nc;
+            }
+            memset(&part.ops[part.nops], 0, sizeof part.ops[part.nops]);
+            if (pay_parse_op(p, p + n, &part.ops[part.nops])) goto bad;
+            part.nops++; p += n;
+        } else if (pb_skip(&p, end, w)) goto bad;
+    }
+    if (!part.name || !*part.name) goto bad;
+    if (strchr(part.name, '/') || !strcmp(part.name, ".") || !strcmp(part.name, "..")) goto bad;
+    if (py->nparts == py->partcap) {
+        uint32_t nc = py->partcap ? py->partcap * 2 : 8;
+        ppart_t *np = realloc(py->parts, (size_t)nc * sizeof *np);
+        if (!np) goto bad;
+        py->parts = np; py->partcap = nc;
+    }
+    py->parts[py->nparts++] = part;
+    return 0;
+bad:
+    free(part.name);
+    for (uint32_t i = 0; i < part.nops; i++) free(part.ops[i].ext);
+    free(part.ops);
+    return -1;
+}
+
+static int pay_parse_manifest(pay_t *py, const uint8_t *p, size_t len) {
+    const uint8_t *end = p + len;
+    py->block_size = 4096;
+    while (p < end) {
+        uint64_t f; uint32_t w;
+        if (pb_field(&p, end, &f, &w)) return -1;
+        if (f == 3 && w == 0) { if (pb_varint(&p, end, &py->block_size)) return -1; }
+        else if (f == 13 && w == 2) {
+            uint64_t n; if (pb_varint(&p, end, &n) || n > (uint64_t)(end - p)) return -1;
+            if (pay_parse_part(p, p + n, py)) return -1;
+            p += n;
+        } else if (pb_skip(&p, end, w)) return -1;
+    }
+    return py->nparts && py->block_size ? 0 : -1;
+}
+
+static void pay_free(pay_t *py) {
+    for (uint32_t i = 0; i < py->nparts; i++) {
+        for (uint32_t j = 0; j < py->parts[i].nops; j++) free(py->parts[i].ops[j].ext);
+        free(py->parts[i].ops); free(py->parts[i].name);
+    }
+    free(py->parts); memset(py, 0, sizeof *py);
+}
+
+static int pay_load(pay_t *py, const char *path) {
+    memset(py, 0, sizeof *py);
+    snprintf(py->path, sizeof py->path, "%s", path);
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+    if (fseeko(f, 0, SEEK_END)) { fclose(f); return -1; }
+    off_t sz = ftello(f); py->file_size = (uint64_t)sz;
+    uint8_t h[24];
+    if (sz < 20 || !rd(f, 0, h, 20) || memcmp(h, "CrAU", 4)) { fclose(f); return -1; }
+    uint64_t ver = be64(h + 4), msize = be64(h + 12), sig = 0;
+    size_t hdr = 20;
+    if (ver >= 2) {
+        if (sz < 24 || !rd(f, 20, h + 20, 4)) { fclose(f); return -1; }
+        sig = be32(h + 20); hdr = 24;
+    }
+    if (ver < 1 || ver > 2 || msize > (uint64_t)sz - hdr ||
+        sig > (uint64_t)sz - hdr - msize || msize > (256u << 20)) { fclose(f); return -1; }
+    uint8_t *man = malloc((size_t)msize + 1);
+    if (!man) { fclose(f); return -1; }
+    if (!rd(f, (long)hdr, man, (size_t)msize)) { free(man); fclose(f); return -1; }
+    int ok = pay_parse_manifest(py, man, (size_t)msize);
+    free(man); fclose(f);
+    if (ok) { pay_free(py); return -1; }
+    py->data_start = hdr + msize + sig;
+    return 0;
+}
+
+typedef struct {
+    FILE *o; const pext_t *e; uint32_t n, i;
+    uint64_t pos, bs;
+} extw_t;
+
+static uint64_t ext_bytes(const pext_t *e, uint32_t n, uint64_t bs) {
+    uint64_t total = 0;
+    for (uint32_t i = 0; i < n; i++) total += e[i].blocks * bs;
+    return total;
+}
+
+static int extw_put(extw_t *w, const uint8_t *buf, size_t n) {
+    while (n) {
+        if (w->i >= w->n) return -1;
+        uint64_t cap = w->e[w->i].blocks * w->bs;
+        if (w->pos >= cap) { w->i++; w->pos = 0; continue; }
+        uint64_t left = cap - w->pos;
+        size_t k = n < left ? n : (size_t)left;
+        if (fseeko(w->o, (off_t)(w->e[w->i].start * w->bs + w->pos), SEEK_SET)) return -1;
+        if (fwrite(buf, 1, k, w->o) != k) return -1;
+        w->pos += k; buf += k; n -= k;
+    }
+    return 0;
+}
+
+static int extw_done(extw_t *w) {
+    while (w->i < w->n && w->pos >= w->e[w->i].blocks * w->bs) { w->i++; w->pos = 0; }
+    return w->i >= w->n;
+}
+
+/* Decompress one install operation's data while feeding it directly into dst extents. */
+static int pay_decompress(pay_t *py, pop_t *op, extw_t *w) {
+    int p2c[2], c2p[2];
+    if (pipe(p2c) || pipe(c2p)) return -1;
+    pid_t pid = fork();
+    if (pid < 0) { close(p2c[0]); close(p2c[1]); close(c2p[0]); close(c2p[1]); return -1; }
+    if (pid == 0) {
+        dup2(p2c[0], 0); dup2(c2p[1], 1);
+        close(p2c[0]); close(p2c[1]); close(c2p[0]); close(c2p[1]);
+        if (op->type == 11) execlp("brotli", "brotli", "-d", "-c", NULL);
+        else if (op->type == 15) execlp("zstd", "zstd", "-d", "-c", NULL);
+        else if (op->type == 1) execlp("busybox", "busybox", "bzip2", "-dc", NULL);
+        else execlp("busybox", "busybox", "xz", "-dc", NULL);
+        _exit(127);
+    }
+
+    close(p2c[0]); close(c2p[1]);
+    int src = open(py->path, O_RDONLY);
+    uint8_t *cbuf = malloc(1 << 16), *obuf = malloc(1 << 20);
+    uint64_t sent = 0;
+    int in_open = 1, out_open = 1, bad = src < 0 || !cbuf || !obuf;
+    while (!bad && (in_open || out_open)) {
+        struct pollfd pf[2];
+        pf[0].fd = in_open ? p2c[1] : -1; pf[0].events = POLLOUT; pf[0].revents = 0;
+        pf[1].fd = out_open ? c2p[0] : -1; pf[1].events = POLLIN; pf[1].revents = 0;
+        if (poll(pf, 2, -1) < 0) { if (errno == EINTR) continue; bad = 1; break; }
+        if (pf[1].fd >= 0 && (pf[1].revents & (POLLIN | POLLHUP | POLLERR))) {
+            ssize_t n = read(c2p[0], obuf, 1 << 20);
+            if (n > 0) { if (extw_put(w, obuf, (size_t)n)) bad = 1; }
+            else if (n == 0) out_open = 0;
+            else if (errno != EINTR && errno != EAGAIN) out_open = 0;
+        }
+        if (!bad && pf[0].fd >= 0 && (pf[0].revents & (POLLOUT | POLLERR | POLLHUP))) {
+            if (sent >= op->data_len) {
+                close(p2c[1]); in_open = 0;
+            } else {
+                size_t k = op->data_len - sent > (1 << 16) ? (1 << 16) : (size_t)(op->data_len - sent);
+                ssize_t got = pread(src, cbuf, k, (off_t)(py->data_start + op->data_off + sent));
+                if (got <= 0) { bad = 1; break; }
+                size_t off = 0;
+                while (off < (size_t)got) {
+                    ssize_t wr = write(p2c[1], cbuf + off, (size_t)got - off);
+                    if (wr <= 0) { bad = 1; break; }
+                    off += (size_t)wr; sent += (uint64_t)wr;
+                }
+                if (!bad && sent >= op->data_len) { close(p2c[1]); in_open = 0; }
+            }
+        }
+        if ((pf[0].revents & POLLERR) || (pf[1].revents & POLLERR)) bad = 1;
+    }
+    if (in_open) close(p2c[1]);
+    if (out_open) close(c2p[0]);
+    if (src >= 0) close(src);
+    if (bad) { kill(pid, SIGKILL); waitpid(pid, NULL, 0); free(cbuf); free(obuf); return -1; }
+    int st = 0; waitpid(pid, &st, 0);
+    int ok = WIFEXITED(st) && WEXITSTATUS(st) == 0 && extw_done(w);
+    free(cbuf); free(obuf);
+    return ok ? 0 : -1;
+}
+
+static int pay_zero(extw_t *w) {
+    uint8_t *z = calloc(1, 1 << 20);
+    if (!z) return -1;
+    uint64_t total = ext_bytes(w->e, w->n, w->bs), done = 0;
+    int rc = 0;
+    while (done < total) {
+        size_t k = total - done > (1 << 20) ? (1 << 20) : (size_t)(total - done);
+        if (extw_put(w, z, k)) { rc = -1; break; }
+        done += k;
+    }
+    free(z);
+    return rc;
+}
+
+static int dumper_one(pay_t *py, ppart_t *p, int auto_unpack, int *auto_fail) {
+    char out[4700];
+    char d[4400]; snprintf(d, sizeof d, "%s", py->path);
+    char *sl = strrchr(d, '/');
+    if (sl) *sl = 0; else strcpy(d, ".");
+    snprintf(out, sizeof out, "%s/%s.img", d, p->name);
+
+    for (uint32_t i = 0; i < p->nops; i++) {
+        int t = p->ops[i].type;
+        if (t != 0 && t != 1 && t != 6 && t != 7 && t != 8 && t != 11 && t != 15) {
+            fprintf(stderr, "> Error: %s uses unsupported incremental operation %d\n", p->name, t);
+            return 1;
+        }
+    }
+
+    printf("> Extracting: %s\n", p->name); fflush(stdout);
+    FILE *o = fopen(out, "wb");
+    if (!o) { fprintf(stderr, "> Error: cannot write %s\n", out); return 1; }
+    uint64_t max_end = 0;
+    for (uint32_t i = 0; i < p->nops; i++) {
+        pop_t *op = &p->ops[i];
+        for (uint32_t j = 0; j < op->next; j++) {
+            uint64_t e = (op->ext[j].start + op->ext[j].blocks) * py->block_size;
+            if (e > max_end) max_end = e;
+        }
+    }
+
+    int rc = 0;
+    for (uint32_t i = 0; i < p->nops && !rc; i++) {
+        pop_t *op = &p->ops[i];
+        extw_t w = { o, op->ext, op->next, 0, 0, py->block_size };
+        if (op->type == 6 || op->type == 7) {
+            rc = pay_zero(&w);
+            continue;
+        }
+        if (op->data_off > py->file_size - py->data_start ||
+            op->data_len > py->file_size - py->data_start - op->data_off) {
+            fprintf(stderr, "> Error: %s data is outside payload.bin\n", p->name); rc = 1; break;
+        }
+        if (op->type == 0) {
+            uint64_t left = op->data_len;
+            FILE *src = fopen(py->path, "rb");
+            uint8_t *buf = malloc(1 << 20);
+            if (!src || !buf) { free(buf); if (src) fclose(src); rc = 1; break; }
+            if (fseeko(src, (off_t)(py->data_start + op->data_off), SEEK_SET)) rc = 1;
+            while (!rc && left) {
+                size_t k = left > (1 << 20) ? (1 << 20) : (size_t)left;
+                size_t got = fread(buf, 1, k, src);
+                if (got != k || extw_put(&w, buf, k)) rc = 1;
+                left -= k;
+            }
+            free(buf); fclose(src);
+            if (!rc && !extw_done(&w)) rc = 1;
+        } else {
+            rc = pay_decompress(py, op, &w);
+        }
+    }
+    if (!rc && ftruncate(fileno(o), (off_t)max_end)) rc = 1;
+    if (fclose(o)) rc = 1;
+    if (rc) { fprintf(stderr, "> Error: failed to extract %s\n", p->name); remove(out); return 1; }
+    printf("> Done: %s\n", out);
+    if (auto_unpack) {
+        int dl = 0;
+        printf("> Auto-unpacking: %s\n", p->name); fflush(stdout);
+        if (extract_one(out, &dl, 0)) { fprintf(stderr, "> Warning: auto-unpack failed: %s\n", out); *auto_fail = 1; }
+    }
+    return 0;
+}
+
+static int cmd_dumper(int argc, char **argv) {
+    const char *parts = NULL, *file = NULL;
+    int list = 0, del = 0, autox = 0;
+    signal(SIGPIPE, SIG_IGN);
+    for (int i = 0; i < argc; i++) {
+        if (!strcmp(argv[i], "--list")) list = 1;
+        else if (!strcmp(argv[i], "--partition") && i + 1 < argc) parts = argv[++i];
+        else if (!strcmp(argv[i], "--delete")) del = flag_val(argc, argv, &i);
+        else if (!strcmp(argv[i], "--auto")) autox = flag_val(argc, argv, &i);
+        else if (argv[i][0] != '-') file = argv[i];
+    }
+    if (!file) { fprintf(stderr, "usage: dna dumper [--list] [--partition a,b] [--delete 0|1] [--auto 0|1] payload.bin\n"); return 2; }
+    char full[4400]; snprintf(full, sizeof full, "%s", file);
+    if (access(full, R_OK) && getenv("DNA_PRO")) snprintf(full, sizeof full, "%s/%s", getenv("DNA_PRO"), file);
+    if (access(full, R_OK)) { fprintf(stderr, "> Error: file not found: %s\n", file); return 1; }
+
+    pay_t py;
+    if (pay_load(&py, full)) { fprintf(stderr, "> Error: %s is not a valid payload.bin\n", file); pay_free(&py); return 1; }
+    if (list) {
+        for (uint32_t i = 0; i < py.nparts; i++) puts(py.parts[i].name);
+        pay_free(&py); return 0;
+    }
+
+    int want = parts && *parts, found = 0, fail = 0, auto_fail = 0;
+    for (uint32_t i = 0; i < py.nparts; i++) {
+        if (want && !in_list(parts, py.parts[i].name)) continue;
+        found = 1;
+        if (dumper_one(&py, &py.parts[i], autox, &auto_fail)) fail = 1;
+    }
+    if (!found) { fprintf(stderr, "> Error: no matching partitions\n"); fail = 1; }
+    pay_free(&py);
+    if (!fail && !auto_fail && del) { printf("> Deleting: %s\n", full); remove(full); }
+    return fail ? 1 : auto_fail;
+}
+
+/* ---------- unzip command ---------- */
+
+static int cmd_unzip(int argc, char **argv) {
+    const char *file = NULL, *dest = NULL;
+    for (int i = 0; i < argc; i++) {
+        if (!strcmp(argv[i], "--delete")) { flag_val(argc, argv, &i); continue; }
+        if (argv[i][0] == '-') continue;
+        if (!file) file = argv[i];
+        else if (!dest) dest = argv[i];
+    }
+    if (!file) { fprintf(stderr, "usage: dna unzip <file.zip2> <dest_dir>\n"); return 2; }
+    char full[4400]; snprintf(full, sizeof full, "%s", file);
+    if (access(full, R_OK) && getenv("DNA_PRO")) snprintf(full, sizeof full, "%s/%s", getenv("DNA_PRO"), file);
+    if (access(full, R_OK)) { fprintf(stderr, "> Error: file not found: %s\n", file); return 1; }
+    if (!dest || !*dest) dest = ".";
+    if (mkdir_p(dest)) { fprintf(stderr, "> Error: cannot create %s\n", dest); return 1; }
+
+    printf("> Extracting: %s -> %s\n", file, dest); fflush(stdout);
+    char *a[] = { "busybox", "unzip", "-o", "-q", full, "-d", (char *)dest, NULL };
+    int rc = run(a);
+    if (rc) { fprintf(stderr, "> Error: unzip failed (rc=%d)\n", rc); return 1; }
+    printf("> Done: %s\n", dest);
+    return 0;
+}
+
+/* ---------- dispatcher ---------- */
 
 int main(int argc, char **argv) {
     if (argc < 2) {
@@ -1453,7 +1932,8 @@ int main(int argc, char **argv) {
     if (!strcmp(c, "repack"))   return cmd_repack(argc - 2, argv + 2);
     if (!strcmp(c, "lpmake"))   return cmd_lpmake(argc - 2, argv + 2);
     if (!strcmp(c, "convert"))  return cmd_convert(argc - 2, argv + 2);
-    if (!strcmp(c, "dumper") || !strcmp(c, "unzip")) return not_yet(c);
+    if (!strcmp(c, "unzip"))    return cmd_unzip(argc - 2, argv + 2);
+    if (!strcmp(c, "dumper"))   return cmd_dumper(argc - 2, argv + 2);
     fprintf(stderr, "dna: unknown command '%s'\n", c);
     return 2;
 }
