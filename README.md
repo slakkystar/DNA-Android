@@ -68,6 +68,8 @@ By default the prebuilt `assets/tools/dna` is packaged. To compile it from
 
 The repository keeps both the prebuilt binary and the source; they are only
 changed inside the staged build assets. An Android NDK is required for this mode.
+Alternatively pass `-PdnaCc=/path/to/aarch64-linux-android-clang` or put such a
+compiler on `PATH` (for example, a Termux Android clang wrapper).
 
 ## 📄 License
 
