@@ -57,7 +57,7 @@ jobs:
             gradle-${{ runner.os }}-
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
         env:
           JAVA_HOME: ${{ env.JAVA_HOME_17_X64 }}
 
