@@ -1121,7 +1121,7 @@ static int repack_erofs(const char *name, const char *dro, const char *pro, cons
     a[k++] = raw; a[k++] = tree; a[k] = NULL;
     printf("> Building erofs (%s): %s\n", comp, name); fflush(stdout);
     remove(raw);
-    if (run(a)) { fprintf(stderr, "> Error: mkfs.erofs failed\n"); remove(raw); return 1; }
+    if (run_quiet(a)) { fprintf(stderr, "> Error: mkfs.erofs failed\n"); remove(raw); return 1; }
     if (finish_output(raw, final, o)) return 1;
     if (!o->out_kind) printf("> Done: %s\n", final);
     return 0;
