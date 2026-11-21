@@ -2602,6 +2602,7 @@ typedef struct {
     int state;
     int exit_code;
     int started, finished;
+    int erofs_workers;
     char line[8192];
     size_t line_len;
 } build_task_t;
@@ -2661,7 +2662,7 @@ static void task_read(build_task_t *t) {
     }
 }
 
-static int task_start(build_task_t *t, int conv, ropts_t *o, const char *dro, const char *pro, const perf_t *p) {
+static int task_start(build_task_t *t, int conv, ropts_t *o, const char *dro, const char *pro) {
     int fds[2];
     if (pipe(fds)) return -1;
     t->state = 1;
@@ -2679,7 +2680,7 @@ static int task_start(build_task_t *t, int conv, ropts_t *o, const char *dro, co
         close(fds[1]);
         g_repack_quiet = !g_debug;
         ropts_t co = *o;
-        if (t->kind == 1) co.erofs_workers = p->erofs_workers;
+        if (t->kind == 1) co.erofs_workers = t->erofs_workers;
         int rc = repack_one(t->name, conv, &co, dro, pro, t->kind == 3);
         fflush(stdout);
         fflush(stderr);
@@ -2844,6 +2845,7 @@ static int cmd_repack(int argc, char **argv) {
         snprintf(t->name, sizeof t->name, "%s", n);
         t->kind = !access(hdr, R_OK) ? 3 : conv;
         t->pipe_fd = -1;
+        t->erofs_workers = perf.erofs_workers;
         if (t->kind != 3) {
             tstat_t st = { 0, 0 };
             tree_stat(tree, &st, 0);
@@ -2855,12 +2857,25 @@ static int cmd_repack(int argc, char **argv) {
     if (nonboot > 1) qsort(tasks, (size_t)nonboot, sizeof *tasks, task_cmp_desc);
     install_stop_handlers();
     g_stop = 0;
-    int next = 0, active = 0, stop_new = 0;
-    build_task_t *active_t[128];
+    int next = 0, active = 0, stop_new = 0, jobs = perf.part_jobs;
+    int retry_pending = 0, retry_used = 0;
+    build_task_t retry_task;
+    memset(&retry_task, 0, sizeof retry_task);
     while (next < nt || active) {
         if (g_stop) { int rc = tasks_cancel(tasks, nt, pro); free(tasks); return rc; }
+        if (!active && retry_pending) {
+            retry_pending = 0;
+            if (nt >= 128) { fail = 1; break; }
+            memmove(&tasks[next + 1], &tasks[next], (size_t)(nt - next) * sizeof *tasks);
+            tasks[next] = retry_task;
+            nt++;
+            jobs = 1;
+            stop_new = 0;
+            printf("> Retrying %s with fewer resources\n", tasks[next].name);
+            fflush(stdout);
+        }
         if (stop_new && !active) break;
-        while (!stop_new && next < nt && active < perf.part_jobs) {
+        while (!stop_new && next < nt && active < jobs) {
             const char *reason = "";
             gate_t g = perf_gate(&perf, active, &reason);
             if (g == GATE_WAIT) {
@@ -2873,7 +2888,7 @@ static int cmd_repack(int argc, char **argv) {
             const char *fmt = t->kind == 3 ? "boot" : (t->kind == 1 ? "erofs" : (t->kind == 2 ? "f2fs" : "ext4"));
             if (g_stop) break;
             printf("> Packing: %s <%s>\n", t->name, fmt); fflush(stdout);
-            if (task_start(t, conv, &o, dro, pro, &perf)) {
+            if (task_start(t, conv, &o, dro, pro)) {
                 fprintf(stderr, "> Error: cannot start task %s\n", t->name);
                 fail = 1; stop_new = 1; break;
             }
@@ -2888,7 +2903,6 @@ static int cmd_repack(int argc, char **argv) {
             pf[m].fd = tasks[i].pipe_fd;
             pf[m].events = POLLIN;
             pf[m].revents = 0;
-            active_t[m] = &tasks[i];
             m++;
         }
         if (m) poll(pf, (nfds_t)m, 1000);
@@ -2903,11 +2917,23 @@ static int cmd_repack(int argc, char **argv) {
                 task_read(&tasks[i]);
                 if (tasks[i].pipe_fd >= 0) { close(tasks[i].pipe_fd); tasks[i].pipe_fd = -1; }
                 active--;
-                if (WIFSIGNALED(st)) {
+                int sig = WIFSIGNALED(st) ? WTERMSIG(st) : 0;
+                if (sig) {
                     kill(-tasks[i].pid, SIGKILL);
-                    tasks[i].exit_code = 128 + WTERMSIG(st);
+                    tasks[i].exit_code = 128 + sig;
                 } else tasks[i].exit_code = WEXITSTATUS(st);
-                if (tasks[i].exit_code) {
+                if (sig == SIGKILL && !retry_used) {
+                    retry_used = 1;
+                    retry_pending = 1;
+                    stop_new = 1;
+                    memset(&retry_task, 0, sizeof retry_task);
+                    snprintf(retry_task.name, sizeof retry_task.name, "%s", tasks[i].name);
+                    retry_task.kind = tasks[i].kind;
+                    retry_task.estimated_bytes = tasks[i].estimated_bytes;
+                    retry_task.pipe_fd = -1;
+                    retry_task.erofs_workers = perf.erofs_workers / 2;
+                    if (retry_task.erofs_workers < 1) retry_task.erofs_workers = 1;
+                } else if (tasks[i].exit_code) {
                     fprintf(stderr, "> Failed: %s\n", tasks[i].name);
                     fail = 1;
                     stop_new = 1;
