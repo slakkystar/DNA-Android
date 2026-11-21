@@ -2108,6 +2108,8 @@ static void sha256(const void *data, size_t len, uint8_t out[32]) {
 
 /* ---------- output sink: raw (holes) or sparse, written strictly in order ---------- */
 
+#define SINK_MAX_RAW_BLOCKS 1048575u
+
 typedef struct {
     FILE *o; int sparse; uint64_t blocks; uint32_t nchunks; int err;
     int run; uint32_t fillv, rblocks; off_t hdr;          /* open run: 1 = raw data, 2 = fill */
@@ -2162,6 +2164,7 @@ static void sk_block(sink_t *k, const uint8_t *p) {
         else { sk_close(k); k->run = 2; k->fillv = v; k->rblocks = 1; k->hdr = ftello(k->o); if (k->sparse) sk_chunk(k, 0xCAC2, 1, 0, 1, v); }
         if (!k->sparse) { if (v == 0) { if (fseeko(k->o, 4096, SEEK_CUR)) k->err = 1; } else if (fwrite(p, 1, 4096, k->o) != 4096) k->err = 1; }
     } else {
+        if (k->run == 1 && k->rblocks >= SINK_MAX_RAW_BLOCKS) sk_close(k);
         if (k->run == 1) k->rblocks++;
         else { sk_close(k); k->run = 1; k->rblocks = 1; k->hdr = ftello(k->o); if (k->sparse) sk_chunk(k, 0xCAC1, 1, 4096, 0, 0); }
         if (fwrite(p, 1, 4096, k->o) != 4096) k->err = 1;
