@@ -784,7 +784,7 @@ static int extract_one(const char *path, int auto_unpack, int delete_src) {
     const char *t = detect_type(full);
     if (is_img) {
         const char *fn = strrchr(full, '/'); fn = fn ? fn + 1 : full;
-        printf("Unpacking: %s (%s)\n", fn, fs_label(t)); fflush(stdout);
+        printf("Unpacking: %s <%s>\n", fn, fs_label(t)); fflush(stdout);
     }
     if (!strcmp(t, "super")) rc = cmd_lpunpack(n, la);
     else if (!strcmp(t, "sparse")) {
@@ -1118,7 +1118,7 @@ static int repack_ext4(const char *name, const char *dro, const char *pro, const
     char uuid[64] = ""; read_opt(fso, "uuid", uuid, sizeof uuid);
     int rc = 1;
     for (int attempt = 0; attempt < 8; attempt++) {
-        VPRINTF("> Building ext4 (%s): %s, %llu blocks (%llu MiB)\n", o->rw ? "RW" : "RO", name,
+        VPRINTF("> Building <ext4> (%s): %s, %llu blocks (%llu MiB)\n", o->rw ? "RW" : "RO", name,
                (unsigned long long)blocks, (unsigned long long)(blocks * 4 / 1024)); fflush(stdout);
         remove(raw);
         FILE *z = fopen(raw, "wb"); if (!z) { fprintf(stderr, "> Error: cannot create %s\n", raw); return 1; }
@@ -1772,7 +1772,7 @@ static int repack_erofs(const char *name, const char *dro, const char *pro, cons
     snprintf(fsb, sizeof fsb, "--fs-config-file=%s", fsc); if (!access(fsc, R_OK)) a[k++] = fsb;
     snprintf(fcb, sizeof fcb, "--file-contexts=%s", fcx); if (!access(fcx, R_OK)) a[k++] = fcb;
     a[k++] = raw; a[k++] = tree; a[k] = NULL;
-    VPRINTF("> Building erofs (%s): %s\n", comp, name); fflush(stdout);
+    VPRINTF("> Building <erofs> (%s): %s\n", comp, name); fflush(stdout);
     remove(raw);
     if (run_quiet(a)) { fprintf(stderr, "> Error: mkfs.erofs failed\n"); remove(raw); return 1; }
     if (finish_output(raw, final, o)) return 1;
@@ -1806,7 +1806,7 @@ static int repack_f2fs(const char *name, const char *dro, const char *pro, const
     bytes = (bytes + 4095) & ~4095ull;
     if (bytes < (64u << 20)) bytes = 64u << 20;
 
-    VPRINTF("> Building f2fs: %s, %llu MiB\n", name, (unsigned long long)(bytes >> 20)); fflush(stdout);
+    VPRINTF("> Building <f2fs>: %s, %llu MiB\n", name, (unsigned long long)(bytes >> 20)); fflush(stdout);
     remove(raw);
     FILE *z = fopen(raw, "wb");
     if (!z) { fprintf(stderr, "> Error: cannot create %s\n", raw); return 1; }
