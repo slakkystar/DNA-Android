@@ -18,6 +18,7 @@
 #include <sys/wait.h>
 #include <poll.h>
 #include <signal.h>
+#include <ctype.h>
 #ifdef DNA_HAVE_XZ
 #include "xz.h"
 #endif
@@ -989,7 +990,7 @@ static int read_opt(const char *path, const char *key, char *out, size_t n) {
 }
 
 typedef struct {
-    int rw, autosize, sparse, out_kind, brlvl, erofslvl, shrink, delavb;
+    int rw, autosize, sparse, out_kind, brlvl, erofslvl, shrink, delavb, hal_fallback;
     char mode[16];
 } ropts_t;
 
@@ -1207,6 +1208,456 @@ static void fs_config_complete(const char *tree, const char *name, const char *f
     free(known);
 }
 
+
+typedef struct { char *path, *ctx, *parent; } fc_ent_t;
+
+static int fc_meta(char c) { return strchr(".+*?()[]{}|^$", c) != NULL; }
+
+static int fc_exact(const char *pat, char *out, size_t n) {
+    size_t j = 0;
+    for (size_t i = 0; pat[i]; i++) {
+        if (pat[i] == '\\') {
+            if (!pat[i + 1] || j + 1 >= n) return 0;
+            out[j++] = pat[++i];
+        } else {
+            if (fc_meta(pat[i]) || j + 1 >= n) return 0;
+            out[j++] = pat[i];
+        }
+    }
+    out[j] = 0;
+    return 1;
+}
+
+static void fc_norm(char *s) {
+    size_t l = strlen(s);
+    while (l > 1 && s[l - 1] == '/') s[--l] = 0;
+}
+
+static void fc_dir(const char *path, char *out, size_t n) {
+    const char *s = strrchr(path, '/');
+    if (!s) { snprintf(out, n, "."); return; }
+    if (s == path) { snprintf(out, n, "/"); return; }
+    size_t l = (size_t)(s - path);
+    if (l >= n) l = n - 1;
+    memcpy(out, path, l); out[l] = 0;
+}
+
+static int fc_under(const char *lit, const char *name, const char **rel) {
+    char prefix[512];
+    snprintf(prefix, sizeof prefix, "/%s", name);
+    size_t n = strlen(prefix);
+    if (strncmp(lit, prefix, n)) return 0;
+    if (!lit[n]) { *rel = lit + n; return 1; }
+    if (lit[n] != '/') return 0;
+    *rel = lit + n + 1;
+    return 1;
+}
+
+static int fc_parent_ok(const char *tree, const char *rel) {
+    if (!*rel) return 1;
+    char parent[8192], full[8192];
+    const char *s = strrchr(rel, '/');
+    if (!s) parent[0] = 0;
+    else {
+        size_t l = (size_t)(s - rel);
+        if (l >= sizeof parent) return 0;
+        memcpy(parent, rel, l); parent[l] = 0;
+    }
+    if (*parent) snprintf(full, sizeof full, "%s/%s", tree, parent);
+    else snprintf(full, sizeof full, "%s", tree);
+    struct stat st;
+    return !stat(full, &st) && S_ISDIR(st.st_mode);
+}
+
+static int fc_implicit(const char *rel) {
+    const char *base = strrchr(rel, '/');
+    base = base ? base + 1 : rel;
+    return !strcmp(base, "lost+found");
+}
+
+static int fc_stale(const char *lit, const char *tree, const char *name) {
+    const char *rel;
+    if (!fc_under(lit, name, &rel) || fc_implicit(rel) || !fc_parent_ok(tree, rel)) return 0;
+    char full[8192];
+    if (*rel) snprintf(full, sizeof full, "%s/%s", tree, rel);
+    else snprintf(full, sizeof full, "%s", tree);
+    struct stat st;
+    return lstat(full, &st) != 0;
+}
+
+
+static size_t fs_config_prune(const char *tree, const char *name, const char *fsc) {
+    FILE *f = fopen(fsc, "r");
+    if (!f) return 0;
+    char tmp[4600];
+    snprintf(tmp, sizeof tmp, "%s.tmp", fsc);
+    FILE *o = fopen(tmp, "w");
+    if (!o) { fclose(f); return 0; }
+    char line[8192];
+    size_t removed = 0;
+    while (fgets(line, sizeof line, f)) {
+        char *p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        char *e = p;
+        while (*e && *e != ' ' && *e != '\t' && *e != '\r' && *e != '\n') e++;
+        int drop = 0;
+        if (e != p) {
+            char key[8192], abs[8192];
+            size_t l = (size_t)(e - p);
+            if (l < sizeof key) {
+                memcpy(key, p, l); key[l] = 0;
+                snprintf(abs, sizeof abs, "/%s", key);
+                const char *rel;
+                if (fc_under(abs, name, &rel) && !fc_implicit(rel)) {
+                    char full[8192];
+                    if (*rel) snprintf(full, sizeof full, "%s/%s", tree, rel);
+                    else snprintf(full, sizeof full, "%s", tree);
+                    struct stat st;
+                    if (lstat(full, &st)) drop = 1;
+                }
+            }
+        }
+        if (drop) removed++;
+        else fputs(line, o);
+    }
+    fclose(f);
+    fclose(o);
+    if (removed) {
+        if (rename(tmp, fsc)) { fprintf(stderr, "> Warning: cannot update %s\n", fsc); remove(tmp); return 0; }
+    } else remove(tmp);
+    return removed;
+}
+
+static int fc_parse_line(const char *line, char *pat, size_t pn, char *ctx, size_t cn) {
+    const char *p = line;
+    while (*p == ' ' || *p == '\t') p++;
+    if (!*p || *p == '#' || *p == '\r' || *p == '\n') return 0;
+    const char *e = p;
+    while (*e && *e != ' ' && *e != '\t' && *e != '\r' && *e != '\n') e++;
+    size_t pl = (size_t)(e - p);
+    if (!pl || pl >= pn) return 0;
+    memcpy(pat, p, pl); pat[pl] = 0;
+    while (*e == ' ' || *e == '\t') e++;
+    const char *c = e;
+    while (*c && *c != ' ' && *c != '\t' && *c != '\r' && *c != '\n') c++;
+    size_t cl = (size_t)(c - e);
+    if (!cl || cl >= cn) return 0;
+    memcpy(ctx, e, cl); ctx[cl] = 0;
+    return 1;
+}
+
+static int fc_ent_cmp(const void *a, const void *b) {
+    const fc_ent_t *x = a, *y = b;
+    return strcmp(x->path, y->path);
+}
+
+static int fc_exists(const fc_ent_t *e, size_t n, const char *path) {
+    fc_ent_t key = { (char *)path, NULL, NULL };
+    return n && bsearch(&key, e, n, sizeof *e, fc_ent_cmp) != NULL;
+}
+
+static int fc_majority(const fc_ent_t *e, size_t n, const char *parent, char *out, size_t on) {
+    int best = 0, second = 0;
+    const char *bc = NULL;
+    for (size_t i = 0; i < n; i++) {
+        if (strcmp(e[i].parent, parent)) continue;
+        int seen = 0;
+        for (size_t j = 0; j < i; j++)
+            if (!strcmp(e[j].parent, parent) && !strcmp(e[j].ctx, e[i].ctx)) { seen = 1; break; }
+        if (seen) continue;
+        int cnt = 0;
+        for (size_t j = i; j < n; j++)
+            if (!strcmp(e[j].parent, parent) && !strcmp(e[j].ctx, e[i].ctx)) cnt++;
+        if (cnt > best) { second = best; best = cnt; bc = e[i].ctx; }
+        else if (cnt > second) second = cnt;
+    }
+    if (best >= 2 && best > second) { snprintf(out, on, "%s", bc); return 1; }
+    return 0;
+}
+
+static const char *fc_default(const char *name) {
+    if (!strcmp(name, "vendor") || !strcmp(name, "odm")) return "u:object_r:vendor_file:s0";
+    return "u:object_r:system_file:s0";
+}
+
+static int fc_bin_hw(const char *dir) {
+    size_t n = strlen(dir);
+    return n >= 7 && !strcmp(dir + n - 7, "/bin/hw");
+}
+
+static void fc_strip_suffix(char *s, const char *suf) {
+    size_t l = strlen(s), sl = strlen(suf);
+    if (l > sl && !strcmp(s + l - sl, suf)) s[l - sl] = 0;
+}
+
+static int fc_hal_type(const char *base, char *out, size_t on) {
+    char b[512];
+    snprintf(b, sizeof b, "%s", base);
+    fc_strip_suffix(b, ".so");
+    fc_strip_suffix(b, "-service");
+    fc_strip_suffix(b, ".service");
+    char *at = strchr(b, '@'); if (at) *at = 0;
+    static const char *pfx[] = {
+        "android.hardware.", "android.hidl.", "vendor.qti.hardware.",
+        "vendor.qti.", "vendor.", "android.", "hardware."
+    };
+    int again = 1;
+    while (again) {
+        again = 0;
+        for (size_t i = 0; i < sizeof pfx / sizeof pfx[0]; i++) {
+            size_t l = strlen(pfx[i]);
+            if (!strncmp(b, pfx[i], l)) { memmove(b, b + l, strlen(b + l) + 1); again = 1; break; }
+        }
+    }
+    char *hw = strstr(b, ".hardware.");
+    if (hw) memmove(b, hw + 10, strlen(hw + 10) + 1);
+    char name[256]; size_t j = 0;
+    for (const char *p = b; *p && *p != '.' && *p != '-' && *p != '@' && j + 1 < sizeof name; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (isalnum(c) || c == '_') name[j++] = (char)tolower(c);
+    }
+    name[j] = 0;
+    if (!j) return 0;
+    snprintf(out, on, "hal_%s_default_exec", name);
+    return 1;
+}
+
+static char **g_cil_files;
+static size_t g_cil_n, g_cil_cap;
+static char *g_cil_root;
+
+static void fc_cil_reset(void) {
+    for (size_t i = 0; i < g_cil_n; i++) free(g_cil_files[i]);
+    free(g_cil_files); g_cil_files = NULL;
+    g_cil_n = g_cil_cap = 0;
+    free(g_cil_root); g_cil_root = NULL;
+}
+
+static void fc_cil_collect(const char *dir, int depth) {
+    if (depth > 64) return;
+    DIR *d = opendir(dir);
+    if (!d) return;
+    struct dirent *de;
+    while ((de = readdir(d))) {
+        if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
+        char full[8192];
+        snprintf(full, sizeof full, "%s/%s", dir, de->d_name);
+        struct stat st;
+        if (lstat(full, &st)) continue;
+        if (S_ISDIR(st.st_mode)) { fc_cil_collect(full, depth + 1); continue; }
+        if (!S_ISREG(st.st_mode)) continue;
+        size_t l = strlen(full);
+        if (l <= 4 || strcmp(full + l - 4, ".cil")) continue;
+        if (g_cil_n == g_cil_cap) {
+            size_t nc = g_cil_cap ? g_cil_cap * 2 : 16;
+            char **np = realloc(g_cil_files, nc * sizeof *np);
+            if (!np) break;
+            g_cil_files = np; g_cil_cap = nc;
+        }
+        g_cil_files[g_cil_n] = strdup(full);
+        if (!g_cil_files[g_cil_n]) break;
+        g_cil_n++;
+    }
+    closedir(d);
+}
+
+static int fc_token(const char *buf, const char *tok) {
+    size_t n = strlen(tok);
+    const char *p = buf;
+    while ((p = strstr(p, tok))) {
+        int left = (p == buf) || !(isalnum((unsigned char)p[-1]) || p[-1] == '_');
+        int right = !(isalnum((unsigned char)p[n]) || p[n] == '_');
+        if (left && right) return 1;
+        p += n;
+    }
+    return 0;
+}
+
+static int fc_cil_file(const char *path, const char *type) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return 0;
+    if (fseek(f, 0, SEEK_END)) { fclose(f); return 0; }
+    long sz = ftell(f);
+    if (sz <= 0 || sz > (128L << 20)) { fclose(f); return 0; }
+    rewind(f);
+    char *buf = malloc((size_t)sz + 1);
+    if (!buf) { fclose(f); return 0; }
+    size_t got = fread(buf, 1, (size_t)sz, f);
+    fclose(f);
+    buf[got] = 0;
+    int r = fc_token(buf, type);
+    free(buf);
+    return r;
+}
+
+static int fc_cil_has(const char *dro, const char *type) {
+    if (!g_cil_root || strcmp(g_cil_root, dro)) {
+        fc_cil_reset();
+        g_cil_root = strdup(dro);
+        if (!g_cil_root) return 0;
+        fc_cil_collect(dro, 0);
+    }
+    for (size_t i = 0; i < g_cil_n; i++) if (fc_cil_file(g_cil_files[i], type)) return 1;
+    return 0;
+}
+
+typedef struct {
+    const char *tree, *name, *dro;
+    fc_ent_t *ents; size_t nents;
+    char **adds; size_t nadd, cap;
+    int hal_fallback;
+} fcx_ctx_t;
+
+static void fc_escape(const char *in, char *out, size_t n) {
+    size_t j = 0;
+    for (; *in && j + 2 < n; in++) {
+        if (fc_meta(*in) || *in == '\\') out[j++] = '\\';
+        out[j++] = *in;
+    }
+    out[j] = 0;
+}
+
+static void fc_add_line(fcx_ctx_t *c, const char *path, const char *ctx) {
+    if (c->nadd == c->cap) {
+        size_t nc = c->cap ? c->cap * 2 : 64;
+        char **np = realloc(c->adds, nc * sizeof *np);
+        if (!np) return;
+        c->adds = np; c->cap = nc;
+    }
+    char esc[16384];
+    fc_escape(path, esc, sizeof esc);
+    size_t l = strlen(esc) + strlen(ctx) + 3;
+    char *s = malloc(l);
+    if (!s) return;
+    snprintf(s, l, "%s %s\n", esc, ctx);
+    c->adds[c->nadd++] = s;
+}
+
+static void fc_add_path(fcx_ctx_t *c, const char *rel, const struct stat *st) {
+    char abs[8192], parent[8192], tmp[512], type[256];
+    if (*rel) snprintf(abs, sizeof abs, "/%s/%s", c->name, rel);
+    else snprintf(abs, sizeof abs, "/%s", c->name);
+    if (fc_exists(c->ents, c->nents, abs)) return;
+    fc_dir(abs, parent, sizeof parent);
+    const char *ctx;
+    if (!S_ISDIR(st->st_mode) && fc_bin_hw(parent)) {
+        const char *base = strrchr(abs, '/');
+        base = base ? base + 1 : abs;
+        int have = fc_hal_type(base, type, sizeof type);
+        if (have && fc_cil_has(c->dro, type)) {
+            snprintf(tmp, sizeof tmp, "u:object_r:%s:s0", type);
+            ctx = tmp;
+        } else if (c->hal_fallback) {
+            ctx = "u:object_r:hal_allocator_default_exec:s0";
+            if (have) fprintf(stderr, "> Warning: %s not found in .cil, using hal_allocator_default_exec for %s\n", type, abs);
+        } else {
+            ctx = fc_default(c->name);
+            if (have) fprintf(stderr, "> Warning: %s not found in .cil, using %s for %s\n", type, ctx, abs);
+        }
+    } else if (fc_majority(c->ents, c->nents, parent, tmp, sizeof tmp)) ctx = tmp;
+    else ctx = fc_default(c->name);
+    fc_add_line(c, abs, ctx);
+}
+
+static void fc_walk(fcx_ctx_t *c, const char *rel, int depth) {
+    if (depth > 64) return;
+    char dir[8192];
+    snprintf(dir, sizeof dir, "%s/%s", c->tree, rel);
+    DIR *d = opendir(dir);
+    if (!d) return;
+    struct dirent *de;
+    while ((de = readdir(d))) {
+        if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
+        char child[8192], full[8192];
+        snprintf(child, sizeof child, "%s%s%s", rel, *rel ? "/" : "", de->d_name);
+        snprintf(full, sizeof full, "%s/%s", c->tree, child);
+        struct stat st;
+        if (lstat(full, &st)) continue;
+        fc_add_path(c, child, &st);
+        if (S_ISDIR(st.st_mode)) fc_walk(c, child, depth + 1);
+    }
+    closedir(d);
+}
+
+static void file_contexts_sync(const char *dro, const char *name, const char *tree, const char *fcx, int hal_fallback) {
+    FILE *f = fopen(fcx, "r");
+    if (!f) return;
+    char **lines = NULL;
+    size_t nl = 0, lc = 0;
+    char line[8192];
+    while (fgets(line, sizeof line, f)) {
+        if (nl == lc) {
+            size_t nc = lc ? lc * 2 : 1024;
+            char **np = realloc(lines, nc * sizeof *np);
+            if (!np) break;
+            lines = np; lc = nc;
+        }
+        lines[nl] = strdup(line);
+        if (!lines[nl]) break;
+        nl++;
+    }
+    fclose(f);
+
+    unsigned char *keep = malloc(nl ? nl : 1);
+    if (!keep) {
+        for (size_t i = 0; i < nl; i++) free(lines[i]);
+        free(lines); return;
+    }
+    fc_ent_t *ents = NULL;
+    size_t ne = 0, ec = 0;
+    size_t removed = 0;
+    for (size_t i = 0; i < nl; i++) {
+        keep[i] = 1;
+        char pat[8192], ctx[512], lit[8192];
+        if (!fc_parse_line(lines[i], pat, sizeof pat, ctx, sizeof ctx)) continue;
+        if (!fc_exact(pat, lit, sizeof lit)) continue;
+        fc_norm(lit);
+        if (fc_stale(lit, tree, name)) { keep[i] = 0; removed++; continue; }
+        if (ne == ec) {
+            size_t nc = ec ? ec * 2 : 1024;
+            fc_ent_t *np = realloc(ents, nc * sizeof *np);
+            if (!np) break;
+            ents = np; ec = nc;
+        }
+        char parent[8192];
+        fc_dir(lit, parent, sizeof parent);
+        ents[ne].path = strdup(lit);
+        ents[ne].ctx = strdup(ctx);
+        ents[ne].parent = strdup(parent);
+        if (!ents[ne].path || !ents[ne].ctx || !ents[ne].parent) {
+            free(ents[ne].path); free(ents[ne].ctx); free(ents[ne].parent);
+            break;
+        }
+        ne++;
+    }
+
+    if (ne > 1) qsort(ents, ne, sizeof *ents, fc_ent_cmp);
+    char tmp[4600];
+    snprintf(tmp, sizeof tmp, "%s.tmp", fcx);
+    FILE *out = fopen(tmp, "w");
+    if (out) {
+        for (size_t i = 0; i < nl; i++) if (keep[i]) fputs(lines[i], out);
+        fcx_ctx_t c = { tree, name, dro, ents, ne, NULL, 0, 0, hal_fallback };
+        struct stat st;
+        if (!lstat(tree, &st)) fc_add_path(&c, "", &st);
+        fc_walk(&c, "", 0);
+        for (size_t i = 0; i < c.nadd; i++) fputs(c.adds[i], out);
+        fclose(out);
+        if (removed || c.nadd) {
+            if (rename(tmp, fcx)) { fprintf(stderr, "> Warning: cannot update %s\n", fcx); remove(tmp); }
+            else printf("> Contexts: %zu added, %zu removed\n", c.nadd, removed);
+        } else remove(tmp);
+        for (size_t i = 0; i < c.nadd; i++) free(c.adds[i]);
+        free(c.adds);
+    }
+
+    for (size_t i = 0; i < ne; i++) { free(ents[i].path); free(ents[i].ctx); free(ents[i].parent); }
+    free(ents);
+    for (size_t i = 0; i < nl; i++) free(lines[i]);
+    free(lines);
+    free(keep);
+}
+
 static int repack_erofs(const char *name, const char *dro, const char *pro, const ropts_t *o) {
     char tree[4400], fsc[4600], fcx[4600], fso[4600], final[4600], raw[4700], mp[300], comp[64], uuid[64] = "", ub[80], fcb[4700], fsb[4700];
     snprintf(tree, sizeof tree, "%s/%s", dro, name);
@@ -1226,7 +1677,6 @@ static int repack_erofs(const char *name, const char *dro, const char *pro, cons
     snprintf(fsb, sizeof fsb, "--fs-config-file=%s", fsc); if (!access(fsc, R_OK)) a[k++] = fsb;
     snprintf(fcb, sizeof fcb, "--file-contexts=%s", fcx); if (!access(fcx, R_OK)) a[k++] = fcb;
     a[k++] = raw; a[k++] = tree; a[k] = NULL;
-    if (!access(fsc, R_OK)) fs_config_complete(tree, name, fsc);
     printf("> Building erofs (%s): %s\n", comp, name); fflush(stdout);
     remove(raw);
     if (run_quiet(a)) { fprintf(stderr, "> Error: mkfs.erofs failed\n"); remove(raw); return 1; }
@@ -1305,9 +1755,9 @@ static int repack_boot(const char *name, const char *dro, const char *pro) {
 }
 
 /* dna repack <dirs,...> --read 1|0 --auto 1|0 --format 0|1 --type 0|1|2 --br N --erofs N --mode lz4hc|lz4|lzma
- *            --compress 0|1 --delavb 0|1 --convert 0|1|2   (convert: 0 ext4, 1 erofs, 2 f2fs) */
+ *            --compress 0|1 --delavb 0|1 --hal-fallback 0|1 --convert 0|1|2   (convert: 0 ext4, 1 erofs, 2 f2fs) */
 static int cmd_repack(int argc, char **argv) {
-    ropts_t o = { 1, 1, 0, 0, 0, 0, 0, 0, "lz4hc" }; int conv = 0;
+    ropts_t o = { 1, 1, 0, 0, 0, 0, 0, 0, 0, "lz4hc" }; int conv = 0;
     char *names[128]; int nn = 0;
     for (int i = 0; i < argc; i++) {
         const char *a = argv[i]; int hasv = i + 1 < argc;
@@ -1320,6 +1770,7 @@ static int cmd_repack(int argc, char **argv) {
         else if (!strcmp(a, "--mode") && hasv) snprintf(o.mode, sizeof o.mode, "%s", argv[++i]);
         else if (!strcmp(a, "--compress")) o.shrink = flag_val(argc, argv, &i);
         else if (!strcmp(a, "--delavb")) o.delavb = flag_val(argc, argv, &i);
+        else if (!strcmp(a, "--hal-fallback")) o.hal_fallback = flag_val(argc, argv, &i);
         else if (!strcmp(a, "--convert") && hasv) conv = atoi(argv[++i]);
         else if (a[0] != '-') for (char *t = strtok(argv[i], ", \t\n"); t && nn < 128; t = strtok(NULL, ", \t\n")) names[nn++] = t;
     }
@@ -1339,6 +1790,16 @@ static int cmd_repack(int argc, char **argv) {
         if (!access(hdr, R_OK)) rc = repack_boot(n, dro, pro);
         else {
             if (o.delavb) delavb_tree(tree, 0);
+            char cfgd[4400], fsc[4600], fcx[4600];
+            snprintf(cfgd, sizeof cfgd, "%s/config", dro);
+            snprintf(fsc, sizeof fsc, "%s/%s_fs_config", cfgd, n);
+            snprintf(fcx, sizeof fcx, "%s/%s_file_contexts", cfgd, n);
+            if (!access(fsc, R_OK)) {
+                size_t stale = fs_config_prune(tree, n, fsc);
+                fs_config_complete(tree, n, fsc);
+                if (stale) printf("> fs_config: %zu stale entries removed\n", stale);
+            }
+            if (!access(fcx, R_OK)) file_contexts_sync(dro, n, tree, fcx, o.hal_fallback);
             if (conv == 1) rc = repack_erofs(n, dro, pro, &o);
             else if (conv == 2) rc = repack_f2fs(n, dro, pro, &o);
             else rc = repack_ext4(n, dro, pro, &o);
