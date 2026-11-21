@@ -1390,7 +1390,16 @@ static void fc_strip_suffix(char *s, const char *suf) {
     if (l > sl && !strcmp(s + l - sl, suf)) s[l - sl] = 0;
 }
 
-static int fc_hal_type(const char *base, char *out, size_t on) {
+static int fc_cil_has(const char *dro, const char *type);
+
+static int fc_hal_add(char names[][256], int *n, const char *s) {
+    if (!*s || *n >= 16) return 0;
+    for (int i = 0; i < *n; i++) if (!strcmp(names[i], s)) return 0;
+    snprintf(names[(*n)++], 256, "%s", s);
+    return 1;
+}
+
+static int fc_hal_names(const char *base, char names[][256]) {
     char b[512];
     snprintf(b, sizeof b, "%s", base);
     fc_strip_suffix(b, ".so");
@@ -1411,15 +1420,63 @@ static int fc_hal_type(const char *base, char *out, size_t on) {
     }
     char *hw = strstr(b, ".hardware.");
     if (hw) memmove(b, hw + 10, strlen(hw + 10) + 1);
-    char name[256]; size_t j = 0;
-    for (const char *p = b; *p && *p != '.' && *p != '-' && *p != '@' && j + 1 < sizeof name; p++) {
-        unsigned char c = (unsigned char)*p;
-        if (isalnum(c) || c == '_') name[j++] = (char)tolower(c);
+
+    char comp[8][128];
+    int nc = 0;
+    const char *p = b;
+    while (*p && nc < 8) {
+        while (*p == '.' || *p == '-' || *p == '@') p++;
+        if (!*p) break;
+        const char *e = p;
+        while (*e && *e != '.' && *e != '-' && *e != '@') e++;
+        size_t j = 0;
+        for (; p < e && j + 1 < sizeof comp[0]; p++) {
+            unsigned char c = (unsigned char)*p;
+            if (isalnum(c) || c == '_') comp[nc][j++] = (char)tolower(c);
+        }
+        comp[nc][j] = 0;
+        if (j) nc++;
+        p = e;
     }
-    name[j] = 0;
-    if (!j) return 0;
-    snprintf(out, on, "hal_%s_default_exec", name);
-    return 1;
+    if (!nc) return 0;
+
+    char full[256], alias[256];
+    size_t j = 0;
+    for (int i = 0; i < nc; i++) {
+        if (i) full[j++] = '_';
+        size_t l = strlen(comp[i]);
+        if (j + l >= sizeof full) break;
+        memcpy(full + j, comp[i], l); j += l;
+    }
+    full[j] = 0;
+    snprintf(alias, sizeof alias, "%s", full);
+    if (!strcmp(comp[0], "display")) {
+        size_t l = strlen("graphics");
+        if (l + strlen(alias) - strlen("display") < sizeof alias) {
+            memmove(alias + l, alias + strlen("display"), strlen(alias + strlen("display")) + 1);
+            memcpy(alias, "graphics", l);
+        }
+    }
+
+    int n = 0;
+    fc_hal_add(names, &n, full);
+    if (strcmp(alias, full)) fc_hal_add(names, &n, alias);
+    fc_hal_add(names, &n, comp[0]);
+    fc_hal_add(names, &n, comp[nc - 1]);
+    for (int i = 0; i < nc; i++) fc_hal_add(names, &n, comp[i]);
+    return n;
+}
+
+static int fc_hal_pick(const char *dro, const char *base, char *out, size_t on) {
+    char names[16][256];
+    int n = fc_hal_names(base, names);
+    if (!n) return -1;
+    for (int i = 0; i < n; i++) {
+        char cand[300];
+        snprintf(cand, sizeof cand, "hal_%s_default_exec", names[i]);
+        if (fc_cil_has(dro, cand)) { snprintf(out, on, "%s", cand); return 1; }
+    }
+    return 0;
 }
 
 static char **g_cil_files;
@@ -1543,16 +1600,16 @@ static void fc_add_path(fcx_ctx_t *c, const char *rel, const struct stat *st) {
     if (!S_ISDIR(st->st_mode) && fc_bin_hw(parent)) {
         const char *base = strrchr(abs, '/');
         base = base ? base + 1 : abs;
-        int have = fc_hal_type(base, type, sizeof type);
-        if (have && fc_cil_has(c->dro, type)) {
+        int hp = fc_hal_pick(c->dro, base, type, sizeof type);
+        if (hp == 1) {
             snprintf(tmp, sizeof tmp, "u:object_r:%s:s0", type);
             ctx = tmp;
         } else if (c->hal_fallback) {
             ctx = "u:object_r:hal_allocator_default_exec:s0";
-            if (have) fprintf(stderr, "> Warning: %s not found in .cil, using hal_allocator_default_exec for %s\n", type, abs);
+            if (hp == 0) fprintf(stderr, "> Warning: HAL type for %s not found in .cil, using hal_allocator_default_exec for %s\n", base, abs);
         } else {
             ctx = fc_default(c->name);
-            if (have) fprintf(stderr, "> Warning: %s not found in .cil, using %s for %s\n", type, ctx, abs);
+            if (hp == 0) fprintf(stderr, "> Warning: HAL type for %s not found in .cil, using %s for %s\n", base, ctx, abs);
         }
     } else if (fc_majority(c->ents, c->nents, parent, tmp, sizeof tmp)) ctx = tmp;
     else ctx = fc_default(c->name);
