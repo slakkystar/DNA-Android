@@ -5,8 +5,10 @@ apply plugin: 'kotlin-android-extensions'
 def dnaFromSource = (project.findProperty("dnaFromSource") ?: "false").toString().toBoolean()
 def superchunkFromSource = (project.findProperty("superchunkFromSource") ?: "false").toString().toBoolean()
 def f2fsClean = (project.findProperty("f2fsClean") ?: "false").toString().toBoolean()
+def patchVbmetaFromSource = (project.findProperty("patchVbmetaFromSource") ?: "true").toString().toBoolean()
 def dnaAssetsDir = new File(buildDir, "generated/dnaAssets")
 def dnaSourceFile = file("src/main/assets/tools/dna.c")
+def patchVbmetaSourceFile = file("src/main/assets/tools/patch_vbmeta.sh")
 def xzEmbeddedDir = file("src/main/cpp/xz-embedded")
 def xzSourceFiles = ["xz_crc32.c", "xz_crc64.c", "xz_dec_lzma2.c", "xz_dec_stream.c", "xz_dec_bcj.c"].collect { new File(xzEmbeddedDir, it) }
 def f2fsToolSources = file("src/main/assets/tools-f2fs")
@@ -101,16 +103,18 @@ def findDnaCompiler = {
 
 task prepareDnaAssets {
     group = "build"
-    description = "Stages assets and optionally builds dna and superchunk helpers from source"
+    description = "Stages assets, patch_vbmeta source, and optionally builds dna and superchunk helpers"
     def localAssets = file("src/main/assets")
     inputs.dir(localAssets)
     inputs.file(dnaSourceFile)
+    inputs.file(patchVbmetaSourceFile)
     inputs.dir(xzEmbeddedDir)
     inputs.files(xzSourceFiles)
     superchunkSources.each { name, source -> inputs.file(source) }
     inputs.dir(f2fsToolSources)
     inputs.property("dnaFromSource", dnaFromSource)
     inputs.property("superchunkFromSource", superchunkFromSource)
+    inputs.property("patchVbmetaFromSource", patchVbmetaFromSource)
     inputs.property("f2fsClean", f2fsClean)
     inputs.property("dnaCc", project.findProperty("dnaCc") ?: "")
     inputs.property("dnaNdk", project.findProperty("dnaNdk") ?: "")
@@ -125,6 +129,7 @@ task prepareDnaAssets {
             exclude("tools/merge_superchunk.sh")
             exclude("tools/seprate_superchunk.sh")
             exclude("tools/chunk_split.c")
+            exclude("tools/patch_vbmeta.sh")
             exclude("tools-f2fs/**")
         }
 
@@ -168,6 +173,7 @@ task prepareDnaAssets {
         }
 
         def toolsDir = new File(dnaAssetsDir, "tools")
+        def stagedPatchVbmeta = new File(toolsDir, "patch_vbmeta")
         def stagedMerge = new File(toolsDir, "merge_superchunk")
         def stagedSeprate = new File(toolsDir, "seprate_superchunk")
         def stagedChunkSplit = new File(toolsDir, "chunk_split")
@@ -196,6 +202,23 @@ task prepareDnaAssets {
             logger.lifecycle("superchunk: built merge_superchunk, seprate_superchunk and chunk_split from source")
         } else {
             logger.lifecycle("superchunk: using prebuilt merge_superchunk, seprate_superchunk and chunk_split")
+        }
+
+        if (patchVbmetaFromSource) {
+            delete stagedPatchVbmeta
+            toolsDir.mkdirs()
+            copy {
+                from(patchVbmetaSourceFile)
+                into(toolsDir)
+                rename { "patch_vbmeta" }
+            }
+            if (!stagedPatchVbmeta.isFile()) {
+                throw new GradleException("patch_vbmeta source staging did not produce ${stagedPatchVbmeta}")
+            }
+            stagedPatchVbmeta.setExecutable(true, false)
+            logger.lifecycle("patch_vbmeta: staged ${stagedPatchVbmeta} from ${patchVbmetaSourceFile.name}")
+        } else {
+            logger.lifecycle("patch_vbmeta: using prebuilt ${stagedPatchVbmeta}")
         }
 
         if (f2fsClean) {

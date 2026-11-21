@@ -89,6 +89,16 @@ This stages `merge_superchunk.sh` and `seprate_superchunk.sh` as executable
 helpers and compiles `chunk_split.c` into `chunk_split`. The source files are
 not packaged in either mode. Without the flag the prebuilt binaries are used.
 
+`assets/tools/patch_vbmeta` is also staged from `assets/tools/patch_vbmeta.sh`
+by default; the shell source replaces the shc-compiled prebuilt inside the APK.
+To keep the original prebuilt instead:
+
+```bash
+./gradlew assembleRelease -PpatchVbmetaFromSource=false
+```
+
+The shell source is not packaged in either mode.
+
 To replace the bundled f2fs helpers with clean universal builds inside the APK:
 
 ```bash
