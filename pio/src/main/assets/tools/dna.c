@@ -19,12 +19,32 @@
 #include <poll.h>
 #include <signal.h>
 #include <ctype.h>
+#include <time.h>
 #ifdef DNA_HAVE_XZ
 #include "xz.h"
 #endif
 
 #define VERSION "1.0"
 #define EXTRACT_UNSUPPORTED (-2)
+
+static int g_debug = 0;
+static int g_repack_quiet = 0;
+static struct timespec g_part_t0;
+
+#define VPRINTF(...) do { if (g_debug) printf(__VA_ARGS__); } while (0)
+#define VWARN(...) do { if (g_debug) fprintf(stderr, __VA_ARGS__); } while (0)
+
+static void part_start(void) {
+    clock_gettime(CLOCK_MONOTONIC, &g_part_t0);
+}
+
+static void part_done_line(void) {
+    struct timespec t1;
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    double secs = (double)(t1.tv_sec - g_part_t0.tv_sec) +
+                  (double)(t1.tv_nsec - g_part_t0.tv_nsec) / 1000000000.0;
+    printf("> Done in: %.2f secs\n", secs);
+}
 
 /* ---------- format detection ---------- */
 
@@ -298,18 +318,35 @@ static int cmd_lpunpack(int argc, char **argv) {
 static int run(char *const argv[]) {
     pid_t p = fork();
     if (p < 0) return -1;
-    if (p == 0) { execvp(argv[0], argv); fprintf(stderr, "> Error: cannot run %s: %s\n", argv[0], strerror(errno)); _exit(127); }
+    if (p == 0) {
+        if (g_repack_quiet) {
+            int fd = open("/dev/null", O_WRONLY);
+            if (fd >= 0) {
+                dup2(fd, STDOUT_FILENO);
+                dup2(fd, STDERR_FILENO);
+                if (fd != STDOUT_FILENO && fd != STDERR_FILENO) close(fd);
+            }
+        }
+        execvp(argv[0], argv); fprintf(stderr, "> Error: cannot run %s: %s\n", argv[0], strerror(errno)); _exit(127);
+    }
     int st; waitpid(p, &st, 0);
     return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
 }
 
-/* Same as run(), but hides the tool's stdout (progress/banner). stderr stays visible. */
+/* Same as run(), but hides the tool's stdout (progress/banner). stderr stays visible.
+ * In debug mode nothing is hidden; in normal repacking both streams are hidden. */
 static int run_quiet(char *const argv[]) {
     pid_t p = fork();
     if (p < 0) return -1;
     if (p == 0) {
-        int fd = open("/dev/null", O_WRONLY);
-        if (fd >= 0) { dup2(fd, STDOUT_FILENO); if (fd != STDOUT_FILENO) close(fd); }
+        if (!g_debug) {
+            int fd = open("/dev/null", O_WRONLY);
+            if (fd >= 0) {
+                dup2(fd, STDOUT_FILENO);
+                if (g_repack_quiet) dup2(fd, STDERR_FILENO);
+                if (fd != STDOUT_FILENO && fd != STDERR_FILENO) close(fd);
+            }
+        }
         execvp(argv[0], argv); fprintf(stderr, "> Error: cannot run %s: %s\n", argv[0], strerror(errno)); _exit(127);
     }
     int st; waitpid(p, &st, 0);
@@ -1022,7 +1059,7 @@ static void delavb_file(const char *path) {
         on += (size_t)snprintf(out + on, (1 << 20) - on, "%s", buf);
     }
     fclose(f);
-    if (changed) { FILE *w = fopen(path, "w"); if (w) { fwrite(out, 1, on, w); fclose(w); printf("> AVB removed from %s\n", path); } }
+    if (changed) { FILE *w = fopen(path, "w"); if (w) { fwrite(out, 1, on, w); fclose(w); VPRINTF("> AVB removed from %s\n", path); } }
     free(out);
 }
 
@@ -1045,15 +1082,16 @@ static int finish_output(const char *raw, const char *final, const ropts_t *o) {
         char dir[4400], name[512]; snprintf(dir, sizeof dir, "%s", final);
         char *sl = strrchr(dir, '/'); if (sl) *sl = 0; else strcpy(dir, ".");
         base_name(final, name, sizeof name);
-        printf("> Converting to %s\n", o->out_kind == 2 ? "dat + brotli" : "dat"); fflush(stdout);
+        VPRINTF("> Converting to %s\n", o->out_kind == 2 ? "dat + brotli" : "dat"); fflush(stdout);
         rc = img_to_dat(raw, dir, name, o->brlvl > 0 ? o->brlvl : 3, o->out_kind == 2);
         remove(raw);
-        if (!rc) printf("> Done: %s/%s.%s\n", dir, name, o->out_kind == 2 ? "new.dat.br" : "new.dat");
+        if (!rc) { part_done_line(); printf("> Done: %s/%s.%s\n", dir, name, o->out_kind == 2 ? "new.dat.br" : "new.dat"); }
         return rc;
     }
-    if (!access(final, F_OK)) printf("> Replacing existing: %s\n", final);
-    if (o->sparse && !o->out_kind) { printf("> Converting to sparse\n"); fflush(stdout); rc = raw_to_sparse(raw, final); remove(raw); }
+    if (!access(final, F_OK)) VPRINTF("> Replacing existing: %s\n", final);
+    if (o->sparse && !o->out_kind) { VPRINTF("> Converting to sparse\n"); fflush(stdout); rc = raw_to_sparse(raw, final); remove(raw); }
     else rc = rename(raw, final);
+    if (!rc) part_done_line();
     return rc;
 }
 
@@ -1065,7 +1103,7 @@ static int repack_ext4(const char *name, const char *dro, const char *pro, const
     snprintf(final, sizeof final, "%s/out/%s" REPACK_SUFFIX ".img", pro, name);
     snprintf(raw, sizeof raw, "%s.tmp", final);
     if (access(fsc, R_OK)) { fprintf(stderr, "> Error: %s not found\n", fsc); return 1; }
-    if (access(fcx, R_OK)) { fprintf(stderr, "> Warning: %s not found, SELinux labels will be missing\n", fcx); }
+    if (access(fcx, R_OK)) { VWARN("> Warning: %s not found, SELinux labels will be missing\n", fcx); }
 
     tstat_t st = {0, 0}; tree_stat(tree, &st, 0);
     uint64_t inodes = st.entries + st.entries / 20 + 64;
@@ -1074,13 +1112,13 @@ static int repack_ext4(const char *name, const char *dro, const char *pro, const
     if (o->autosize) blocks = est * 105 / 100 + 2048;                       /* ~8 MiB free space */
     else {
         uint64_t sz = read_u64_file(inf);
-        if (sz < 4096) { printf("> Original size unknown (%s missing), using Auto\n", inf); blocks = est * 105 / 100 + 2048; }
+        if (sz < 4096) { VPRINTF("> Original size unknown (%s missing), using Auto\n", inf); blocks = est * 105 / 100 + 2048; }
         else blocks = sz / 4096;
     }
     char uuid[64] = ""; read_opt(fso, "uuid", uuid, sizeof uuid);
     int rc = 1;
     for (int attempt = 0; attempt < 8; attempt++) {
-        printf("> Building ext4 (%s): %s, %llu blocks (%llu MiB)\n", o->rw ? "RW" : "RO", name,
+        VPRINTF("> Building ext4 (%s): %s, %llu blocks (%llu MiB)\n", o->rw ? "RW" : "RO", name,
                (unsigned long long)blocks, (unsigned long long)(blocks * 4 / 1024)); fflush(stdout);
         remove(raw);
         FILE *z = fopen(raw, "wb"); if (!z) { fprintf(stderr, "> Error: cannot create %s\n", raw); return 1; }
@@ -1109,14 +1147,14 @@ static int repack_ext4(const char *name, const char *dro, const char *pro, const
         if (!rc) break;
         if (!o->autosize) { fprintf(stderr, "> Error: content does not fit into the original size, use Auto size\n"); remove(raw); return 1; }
         blocks = blocks * 112 / 100 + 512;
-        fprintf(stderr, "> Image too small, retrying with a larger size\n");
+        VWARN("> Image too small, retrying with a larger size\n");
     }
     if (rc) { fprintf(stderr, "> Error: e2fsdroid failed\n"); remove(raw); return 1; }
     if (o->shrink) {
-        printf("> Shrinking free space\n"); fflush(stdout);
+        VPRINTF("> Shrinking free space\n"); fflush(stdout);
         char *ck[] = { "e2fsck", "-fy", raw, NULL }; run(ck);
         char *rs[] = { "resize2fs", "-f", "-M", raw, NULL };
-        if (run(rs)) fprintf(stderr, "> Warning: shrink failed, keeping full size\n");
+        if (run(rs)) VWARN("> Warning: shrink failed, keeping full size\n");
     }
     if (finish_output(raw, final, o)) { fprintf(stderr, "> Error: cannot write %s\n", final); return 1; }
     if (!o->out_kind) printf("> Done: %s\n", final);
@@ -1323,7 +1361,7 @@ static size_t fs_config_prune(const char *tree, const char *name, const char *fs
     fclose(f);
     fclose(o);
     if (removed) {
-        if (rename(tmp, fsc)) { fprintf(stderr, "> Warning: cannot update %s\n", fsc); remove(tmp); return 0; }
+        if (rename(tmp, fsc)) { VWARN("> Warning: cannot update %s\n", fsc); remove(tmp); return 0; }
     } else remove(tmp);
     return removed;
 }
@@ -1606,10 +1644,10 @@ static void fc_add_path(fcx_ctx_t *c, const char *rel, const struct stat *st) {
             ctx = tmp;
         } else if (c->hal_fallback) {
             ctx = "u:object_r:hal_allocator_default_exec:s0";
-            if (hp == 0) fprintf(stderr, "> Warning: HAL type for %s not found in .cil, using hal_allocator_default_exec for %s\n", base, abs);
+            if (hp == 0) VWARN("> Warning: HAL type for %s not found in .cil, using hal_allocator_default_exec for %s\n", base, abs);
         } else {
             ctx = fc_default(c->name);
-            if (hp == 0) fprintf(stderr, "> Warning: HAL type for %s not found in .cil, using %s for %s\n", base, ctx, abs);
+            if (hp == 0) VWARN("> Warning: HAL type for %s not found in .cil, using %s for %s\n", base, ctx, abs);
         }
     } else if (fc_majority(c->ents, c->nents, parent, tmp, sizeof tmp)) ctx = tmp;
     else ctx = fc_default(c->name);
@@ -1701,8 +1739,8 @@ static void file_contexts_sync(const char *dro, const char *name, const char *tr
         for (size_t i = 0; i < c.nadd; i++) fputs(c.adds[i], out);
         fclose(out);
         if (removed || c.nadd) {
-            if (rename(tmp, fcx)) { fprintf(stderr, "> Warning: cannot update %s\n", fcx); remove(tmp); }
-            else printf("> Contexts: %zu added, %zu removed\n", c.nadd, removed);
+            if (rename(tmp, fcx)) { VWARN("> Warning: cannot update %s\n", fcx); remove(tmp); }
+            else VPRINTF("> Contexts: %zu added, %zu removed\n", c.nadd, removed);
         } else remove(tmp);
         for (size_t i = 0; i < c.nadd; i++) free(c.adds[i]);
         free(c.adds);
@@ -1734,7 +1772,7 @@ static int repack_erofs(const char *name, const char *dro, const char *pro, cons
     snprintf(fsb, sizeof fsb, "--fs-config-file=%s", fsc); if (!access(fsc, R_OK)) a[k++] = fsb;
     snprintf(fcb, sizeof fcb, "--file-contexts=%s", fcx); if (!access(fcx, R_OK)) a[k++] = fcb;
     a[k++] = raw; a[k++] = tree; a[k] = NULL;
-    printf("> Building erofs (%s): %s\n", comp, name); fflush(stdout);
+    VPRINTF("> Building erofs (%s): %s\n", comp, name); fflush(stdout);
     remove(raw);
     if (run_quiet(a)) { fprintf(stderr, "> Error: mkfs.erofs failed\n"); remove(raw); return 1; }
     if (finish_output(raw, final, o)) return 1;
@@ -1768,7 +1806,7 @@ static int repack_f2fs(const char *name, const char *dro, const char *pro, const
     bytes = (bytes + 4095) & ~4095ull;
     if (bytes < (64u << 20)) bytes = 64u << 20;
 
-    printf("> Building f2fs: %s, %llu MiB\n", name, (unsigned long long)(bytes >> 20)); fflush(stdout);
+    VPRINTF("> Building f2fs: %s, %llu MiB\n", name, (unsigned long long)(bytes >> 20)); fflush(stdout);
     remove(raw);
     FILE *z = fopen(raw, "wb");
     if (!z) { fprintf(stderr, "> Error: cannot create %s\n", raw); return 1; }
@@ -1800,14 +1838,15 @@ static int repack_boot(const char *name, const char *dro, const char *pro) {
     if (access(orig, R_OK)) snprintf(orig, sizeof orig, "%s/%s.img", pro, name);        /* fallback: old projects */
     if (access(orig, R_OK)) { fprintf(stderr, "> Error: original %s/%s.img is required to repack boot images\n", dir, name); return 1; }
     if (!getcwd(cwd, sizeof cwd) || chdir(dir)) return 1;
-    printf("> Repacking boot image: %s\n", name); fflush(stdout);
+    VPRINTF("> Repacking boot image: %s\n", name); fflush(stdout);
     char tmp[4700]; snprintf(tmp, sizeof tmp, "%s.tmp", final);
     char *a[] = { "magiskboot", "repack", orig, tmp, NULL };
     int rc = run(a);
     if (chdir(cwd)) return 1;
     if (!rc) {
-        if (!access(final, F_OK)) printf("> Replacing existing: %s\n", final);
+        if (!access(final, F_OK)) VPRINTF("> Replacing existing: %s\n", final);
         if (rename(tmp, final)) { fprintf(stderr, "> Error: cannot write %s\n", final); return 1; }
+        part_done_line();
         printf("> Done: %s\n", final);
     } else remove(tmp);
     return rc;
@@ -1838,15 +1877,19 @@ static int cmd_repack(int argc, char **argv) {
     if (!nn) { fprintf(stderr, "usage: dna repack <dir[,dir]> [options]\n"); return 2; }
     { char od[4400]; snprintf(od, sizeof od, "%s/out", pro);
       if (mkdir_p(od)) { fprintf(stderr, "> Error: cannot create %s\n", od); return 1; } }
+    g_repack_quiet = !g_debug;
     int fail = 0;
     for (int i = 0; i < nn; i++) {
         char *n = names[i]; size_t l = strlen(n); while (l && n[l - 1] == '/') n[--l] = 0;
         if (!strcmp(n, "config") || !*n) continue;
         char tree[4400], hdr[4600]; snprintf(tree, sizeof tree, "%s/%s", dro, n); snprintf(hdr, sizeof hdr, "%s/header", tree);
         struct stat sb; if (stat(tree, &sb) || !S_ISDIR(sb.st_mode)) { fprintf(stderr, "> Error: %s not found\n", tree); fail = 1; continue; }
-        printf("> Packing: %s\n", n); fflush(stdout);
+        int is_boot = !access(hdr, R_OK);
+        const char *fmt = is_boot ? "boot" : (conv == 1 ? "erofs" : (conv == 2 ? "f2fs" : "ext4"));
+        printf("> Packing: %s <%s>\n", n, fmt); fflush(stdout);
+        part_start();
         int rc;
-        if (!access(hdr, R_OK)) rc = repack_boot(n, dro, pro);
+        if (is_boot) rc = repack_boot(n, dro, pro);
         else {
             if (o.delavb) delavb_tree(tree, 0);
             char cfgd[4400], fsc[4600], fcx[4600];
@@ -1856,7 +1899,7 @@ static int cmd_repack(int argc, char **argv) {
             if (!access(fsc, R_OK)) {
                 size_t stale = fs_config_prune(tree, n, fsc);
                 fs_config_complete(tree, n, fsc);
-                if (stale) printf("> fs_config: %zu stale entries removed\n", stale);
+                if (stale) VPRINTF("> fs_config: %zu stale entries removed\n", stale);
             }
             if (!access(fcx, R_OK)) file_contexts_sync(dro, n, tree, fcx, o.hal_fallback);
             if (conv == 1) rc = repack_erofs(n, dro, pro, &o);
@@ -2790,6 +2833,8 @@ int main(int argc, char **argv) {
         fprintf(stderr, "dna %s\nusage: dna <gettype|dumper|extract|lpunpack|lpmake|repack|convert|unzip> ...\n", VERSION);
         return 2;
     }
+    const char *dbg = getenv("DNA_DEBUG");
+    g_debug = dbg && *dbg && strcmp(dbg, "0");
     const char *c = argv[1];
     if (!strcmp(c, "gettype"))  return cmd_gettype(argc - 2, argv + 2);
     if (!strcmp(c, "lpunpack")) return cmd_lpunpack(argc - 2, argv + 2);

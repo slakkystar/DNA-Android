@@ -63,6 +63,17 @@
                     android:text="@string/transparent_ui"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content" />
+
+                <Switch
+                    android:id="@+id/debug_mode"
+                    android:switchPadding="6dp"
+                    android:padding="0dp"
+                    android:textColor="#888"
+                    android:textSize="12sp"
+                    android:text="@string/debug_mode"
+                    android:layout_marginTop="12dp"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" />
             </LinearLayout>
             <LinearLayout
                 android:paddingBottom="4dp"

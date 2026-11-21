@@ -38,6 +38,7 @@
     <string name="error_root">Failed to obtain ROOT access. If your device is rooted, select "Allow" when the dialog appears in the permission manager!</string>
     <string name="error_su_timeout">ROOT access timeout, check if the permission manager is running in the background!</string>
     <string name="transparent_ui">Transparent interface</string>
+    <string name="debug_mode">Debug image packing</string>
     <string name="title_activity_file_selector">Please select a file</string>
     <string name="title_activity_folder_selector">Please use long press to select a folder</string>
 

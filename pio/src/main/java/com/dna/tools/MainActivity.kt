@@ -44,6 +44,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        DebugConfig(this).sync()
         ThemeModeState.switchTheme(this)
         setContentView(R.layout.activity_main)
 
@@ -322,6 +323,13 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 transparentUi.isChecked = themeConfig.getAllowTransparentUI()
+
+                val debugConfig = DebugConfig(this)
+                val debugMode = layout.findViewById<CompoundButton>(R.id.debug_mode)
+                debugMode.setOnClickListener {
+                    debugConfig.setEnabled((it as CompoundButton).isChecked)
+                }
+                debugMode.isChecked = debugConfig.isEnabled()
 
                 DialogHelper.customDialog(this, layout)
             }

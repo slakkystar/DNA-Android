@@ -27,6 +27,11 @@ if [ -f $TMPDIR/DNA.ini ]; then
   export DNA_PRO=$DNA_DIR/$dna_project
   export DNA_DRO=$DNA_TMP/$dna_project
 fi
+DNA_DEBUG=0
+if [ -f "$START_DIR/DNA.debug" ]; then
+  DNA_DEBUG="$(cat "$START_DIR/DNA.debug")"
+fi
+export DNA_DEBUG
 chown -R $APP_USER_ID:$APP_USER_ID $START_DIR
 # Run script
 if [[ -f "$1" ]]; then

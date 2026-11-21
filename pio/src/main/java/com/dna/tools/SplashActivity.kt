@@ -137,6 +137,7 @@ class SplashActivity : Activity() {
     private fun startToFinish() {
         start_state_text.text = getString(R.string.pop_started)
 
+        DebugConfig(this).sync()
         val config = KrScriptConfig().init(this)
         if (config.beforeStartSh.isNotEmpty()) {
             BeforeStartThread(this, config, UpdateLogViewHandler(start_state_text, Runnable {
