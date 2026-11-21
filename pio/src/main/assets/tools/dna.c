@@ -3204,11 +3204,102 @@ static int cmd_unzip(int argc, char **argv) {
     return 0;
 }
 
+
+static const char *profile_name(perf_class_t c) {
+    switch (c) {
+    case PERF_SAVER: return "saver";
+    case PERF_BALANCED: return "balanced";
+    case PERF_FAST: return "fast";
+    case PERF_TURBO: return "turbo";
+    default: return "manual";
+    }
+}
+
+static const char *storage_name(storage_kind_t s) {
+    switch (s) {
+    case STORAGE_EMMC: return "eMMC";
+    case STORAGE_UFS: return "UFS";
+    case STORAGE_NVME: return "NVMe";
+    case STORAGE_OTHER: return "other";
+    default: return "unknown";
+    }
+}
+
+static int cmd_perf(int argc, char **argv) {
+    int shell = 0, json = 0;
+    for (int i = 0; i < argc; i++) {
+        if (!strcmp(argv[i], "--shell")) shell = 1;
+        else if (!strcmp(argv[i], "--json")) json = 1;
+        else { fprintf(stderr, "usage: dna perf [--shell|--json]\n"); return 2; }
+    }
+    perf_t p; perf_ovr_t ov; perf_load_t ld = { 0, 8, 0, 0, 0 };
+    perf_detect(&p);
+    perf_ovr_from_env(&ov);
+    perf_make_plan(&p, &ld, &ov);
+
+    if (shell) {
+        printf("DNA_PERF_CLASS=%s\n", profile_name(p.cls));
+        printf("DNA_PART_JOBS=%d\n", p.part_jobs);
+        printf("DNA_EROFS_WORKERS=%d\n", p.erofs_workers);
+        printf("DNA_BROTLI_JOBS=%d\n", p.brotli_jobs);
+        printf("DNA_ZSTD_THREADS=%d\n", p.zstd_threads);
+        return 0;
+    }
+    if (json) {
+        printf("{\"profile\":\"%s\",\"storage\":\"%s\",\"mem_total_mb\":%llu,\"mem_avail_mb\":%llu,"
+               "\"cpu_budget\":%d,\"ncpu\":%d,\"big_cores\":%d,\"little_cores\":%d,"
+               "\"temp\":{\"battery\":%d,\"skin\":%d,\"soc\":%d},"
+               "\"psi\":{\"mem\":%d,\"cpu\":%d,\"io\":%d},"
+               "\"free_tmp_mb\":%llu,\"free_out_mb\":%llu,"
+               "\"part_jobs\":%d,\"erofs_workers\":%d,\"brotli_jobs\":%d,\"zstd_threads\":%d,"
+               "\"nice\":%d,\"reserve_mb\":%d}\n",
+               profile_name(p.cls), storage_name(p.storage),
+               (unsigned long long)(p.mem_total_kb / 1024), (unsigned long long)(p.mem_avail_kb / 1024),
+               p.cpu_budget, p.ncpu_online, p.big_cores, p.little_cores,
+               p.temp_battery_c, p.temp_skin_c, p.temp_soc_c,
+               p.psi_mem_avg10, p.psi_cpu_avg10, p.psi_io_avg10,
+               (unsigned long long)(p.free_tmp_bytes >> 20), (unsigned long long)(p.free_pro_bytes >> 20),
+               p.part_jobs, p.erofs_workers, p.brotli_jobs, p.zstd_threads, p.nice_level, p.reserve_mb);
+        return 0;
+    }
+
+    printf("> Device: RAM %.1f/%.1f GiB, %d cores (%d big + %d little), %s\n",
+           (double)p.mem_avail_kb / 1048576.0, (double)p.mem_total_kb / 1048576.0,
+           p.ncpu_online, p.big_cores, p.little_cores, storage_name(p.storage));
+    printf("> Thermal: battery ");
+    if (p.temp_battery_c) printf("%d°C", p.temp_battery_c); else printf("n/a");
+    printf(", skin ");
+    if (p.temp_skin_c) printf("%d°C", p.temp_skin_c); else printf("n/a");
+    printf(", soc ");
+    if (p.temp_soc_c) printf("%d°C", p.temp_soc_c); else printf("n/a");
+    printf("\n");
+    printf("> PSI memory: %d%%\n", p.psi_mem_avg10);
+    printf("> Profile: %s\n", profile_name(p.cls));
+    printf("> Plan: part_jobs=%d, erofs_workers=%d, brotli_jobs=%d, nice=%d\n",
+           p.part_jobs, p.erofs_workers, p.brotli_jobs, p.nice_level);
+
+    const char *dbg = getenv("DNA_PERF_DEBUG");
+    if (dbg && *dbg && strcmp(dbg, "0")) {
+        printf("> perf: RAM total=%llu MiB avail=%llu MiB swap=%llu/%llu MiB\n",
+               (unsigned long long)(p.mem_total_kb / 1024), (unsigned long long)(p.mem_avail_kb / 1024),
+               (unsigned long long)(p.swap_free_kb / 1024), (unsigned long long)(p.swap_total_kb / 1024));
+        printf("> perf: CPU online=%d conf=%d big=%d little=%d budget=%d\n",
+               p.ncpu_online, p.ncpu_conf, p.big_cores, p.little_cores, p.cpu_budget);
+        printf("> perf: storage=%s temps=%d/%d/%d C PSI=%d/%d/%d\n", storage_name(p.storage),
+               p.temp_battery_c, p.temp_skin_c, p.temp_soc_c,
+               p.psi_mem_avg10, p.psi_cpu_avg10, p.psi_io_avg10);
+        printf("> perf: free tmp=%llu MiB out=%llu MiB, reserve=%d MiB\n",
+               (unsigned long long)(p.free_tmp_bytes >> 20),
+               (unsigned long long)(p.free_pro_bytes >> 20), p.reserve_mb);
+    }
+    return 0;
+}
+
 /* ---------- dispatcher ---------- */
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "dna %s\nusage: dna <gettype|dumper|extract|lpunpack|lpmake|repack|convert|unzip> ...\n", VERSION);
+        fprintf(stderr, "dna %s\nusage: dna <gettype|dumper|extract|lpunpack|lpmake|repack|convert|unzip|perf> ...\n", VERSION);
         return 2;
     }
     const char *dbg = getenv("DNA_DEBUG");
@@ -3222,6 +3313,7 @@ int main(int argc, char **argv) {
     if (!strcmp(c, "convert"))  return cmd_convert(argc - 2, argv + 2);
     if (!strcmp(c, "unzip"))    return cmd_unzip(argc - 2, argv + 2);
     if (!strcmp(c, "dumper"))   return cmd_dumper(argc - 2, argv + 2);
+    if (!strcmp(c, "perf"))     return cmd_perf(argc - 2, argv + 2);
     fprintf(stderr, "dna: unknown command '%s'\n", c);
     return 2;
 }
