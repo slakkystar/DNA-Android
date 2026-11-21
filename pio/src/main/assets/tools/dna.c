@@ -1743,7 +1743,7 @@ static int repack_erofs(const char *name, const char *dro, const char *pro, cons
 }
 
 static int repack_f2fs(const char *name, const char *dro, const char *pro, const ropts_t *o) {
-    char tree[4400], fsc[4600], fcx[4600], fso[4600], inf[4600], final[4600], raw[4700], lbl[64], uuid[64] = "";
+    char tree[4400], fsc[4600], fcx[4600], fso[4600], inf[4600], final[4600], raw[4700], lbl[64], uuid[64] = "", mp[300];
     snprintf(tree, sizeof tree, "%s/%s", dro, name);
     snprintf(fsc, sizeof fsc, "%s/config/%s_fs_config", dro, name);
     snprintf(fcx, sizeof fcx, "%s/config/%s_file_contexts", dro, name);
@@ -1752,6 +1752,7 @@ static int repack_f2fs(const char *name, const char *dro, const char *pro, const
     snprintf(final, sizeof final, "%s/out/%s.img", pro, name);
     snprintf(raw, sizeof raw, "%s.tmp", final);
     snprintf(lbl, sizeof lbl, "%.15s", name);
+    snprintf(mp, sizeof mp, "/%s", name);
     read_opt(fso, "uuid", uuid, sizeof uuid);
 
     uint64_t bytes = 0;
@@ -1782,6 +1783,7 @@ static int repack_f2fs(const char *name, const char *dro, const char *pro, const
 
     char *sl[12]; k = 0;
     sl[k++] = "sload_f2fs"; sl[k++] = "-f"; sl[k++] = tree;
+    sl[k++] = "-t"; sl[k++] = mp;
     if (!access(fsc, R_OK)) { sl[k++] = "-C"; sl[k++] = fsc; }
     if (!access(fcx, R_OK)) { sl[k++] = "-s"; sl[k++] = fcx; }
     sl[k++] = raw; sl[k] = NULL;
