@@ -2049,6 +2049,29 @@ static int repack_boot(const char *name, const char *dro, const char *pro) {
     return rc;
 }
 
+static int repack_one(const char *name, int conv, ropts_t *o, const char *dro, const char *pro, int is_boot) {
+    char tree[4400];
+    snprintf(tree, sizeof tree, "%s/%s", dro, name);
+    part_start();
+    if (is_boot) return repack_boot(name, dro, pro) ? 1 : 0;
+    if (o->delavb) delavb_tree(tree, 0);
+    char cfgd[4400], fsc[4600], fcx[4600];
+    snprintf(cfgd, sizeof cfgd, "%s/config", dro);
+    snprintf(fsc, sizeof fsc, "%s/%s_fs_config", cfgd, name);
+    snprintf(fcx, sizeof fcx, "%s/%s_file_contexts", cfgd, name);
+    if (!access(fsc, R_OK)) {
+        size_t stale = fs_config_prune(tree, name, fsc);
+        fs_config_complete(tree, name, fsc);
+        if (stale) VPRINTF("> fs_config: %zu stale entries removed\n", stale);
+    }
+    if (!access(fcx, R_OK)) file_contexts_sync(dro, name, tree, fcx, o->hal_fallback);
+    int rc;
+    if (conv == 1) rc = repack_erofs(name, dro, pro, o);
+    else if (conv == 2) rc = repack_f2fs(name, dro, pro, o);
+    else rc = repack_ext4(name, dro, pro, o);
+    return rc ? 1 : 0;
+}
+
 typedef enum { PERF_SAVER = 0, PERF_BALANCED, PERF_FAST, PERF_TURBO, PERF_MANUAL } perf_class_t;
 typedef enum { STORAGE_UNKNOWN = 0, STORAGE_EMMC, STORAGE_UFS, STORAGE_NVME, STORAGE_OTHER } storage_kind_t;
 
@@ -2570,6 +2593,153 @@ static int perf_check_space(const char *pro, const char *dro, char *const *names
     return 0;
 }
 
+typedef struct {
+    char name[512];
+    int kind;
+    uint64_t estimated_bytes;
+    pid_t pid;
+    int pipe_fd;
+    int state;
+    int exit_code;
+    int started, finished;
+    char line[8192];
+    size_t line_len;
+} build_task_t;
+
+static volatile sig_atomic_t g_stop = 0;
+
+static void stop_handler(int sig) {
+    (void)sig;
+    g_stop = 1;
+}
+
+static void install_stop_handlers(void) {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = stop_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGTERM, &sa, NULL);
+}
+
+static int task_cmp_desc(const void *a, const void *b) {
+    const build_task_t *x = a, *y = b;
+    return x->estimated_bytes < y->estimated_bytes ? 1 : (x->estimated_bytes > y->estimated_bytes ? -1 : 0);
+}
+
+static void task_flush_line(build_task_t *t) {
+    if (!t->line_len) return;
+    t->line[t->line_len] = 0;
+    printf("[%s] %s\n", t->name, t->line);
+    fflush(stdout);
+    t->line_len = 0;
+}
+
+static void task_read(build_task_t *t) {
+    if (t->pipe_fd < 0) return;
+    char b[4096];
+    for (;;) {
+        ssize_t n = read(t->pipe_fd, b, sizeof b);
+        if (n > 0) {
+            for (ssize_t i = 0; i < n; i++) {
+                if (b[i] == '\n') task_flush_line(t);
+                else {
+                    if (t->line_len + 1 >= sizeof t->line) task_flush_line(t);
+                    t->line[t->line_len++] = b[i];
+                }
+            }
+        } else if (n == 0) {
+            task_flush_line(t);
+            close(t->pipe_fd);
+            t->pipe_fd = -1;
+            break;
+        } else {
+            if (errno == EINTR) continue;
+            break;
+        }
+    }
+}
+
+static int task_start(build_task_t *t, int conv, ropts_t *o, const char *dro, const char *pro, const perf_t *p) {
+    int fds[2];
+    if (pipe(fds)) return -1;
+    t->state = 1;
+    t->started = 1;
+    pid_t pid = fork();
+    if (pid < 0) { close(fds[0]); close(fds[1]); return -1; }
+    if (pid == 0) {
+        close(fds[0]);
+        setpgid(0, 0);
+        prctl(PR_SET_PDEATHSIG, SIGTERM);
+        if (getppid() == 1) _exit(1);
+        signal(SIGINT, SIG_DFL);
+        signal(SIGTERM, SIG_DFL);
+        if (dup2(fds[1], STDOUT_FILENO) < 0 || dup2(fds[1], STDERR_FILENO) < 0) _exit(1);
+        close(fds[1]);
+        g_repack_quiet = !g_debug;
+        ropts_t co = *o;
+        if (t->kind == 1) co.erofs_workers = p->erofs_workers;
+        int rc = repack_one(t->name, conv, &co, dro, pro, t->kind == 3);
+        fflush(stdout);
+        fflush(stderr);
+        _exit(rc ? 1 : 0);
+    }
+    setpgid(pid, pid);
+    close(fds[1]);
+    t->pid = pid;
+    t->pipe_fd = fds[0];
+    int fl = fcntl(t->pipe_fd, F_GETFL, 0);
+    if (fl >= 0) fcntl(t->pipe_fd, F_SETFL, fl | O_NONBLOCK);
+    return 0;
+}
+
+static void task_remove_temps(const char *pro, const char *name) {
+    char p[4700];
+    snprintf(p, sizeof p, "%s/out/%s" REPACK_SUFFIX ".img.tmp", pro, name);
+    remove(p);
+    snprintf(p, sizeof p, "%s/out/%s.new.dat", pro, name);
+    remove(p);
+    snprintf(p, sizeof p, "%s/out/%s.new.dat.br", pro, name);
+    remove(p);
+    snprintf(p, sizeof p, "%s/out/%s.transfer.list", pro, name);
+    remove(p);
+    snprintf(p, sizeof p, "%s/out/%s.patch.dat", pro, name);
+    remove(p);
+}
+
+static int tasks_cancel(build_task_t *t, int nt, const char *pro) {
+    for (int i = 0; i < nt; i++) if (t[i].state == 1 && t[i].pid > 0) kill(-t[i].pid, SIGTERM);
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    int left = 1;
+    while (left) {
+        left = 0;
+        for (int i = 0; i < nt; i++) {
+            if (t[i].state != 1 || t[i].pid <= 0) continue;
+            int st;
+            pid_t r = waitpid(t[i].pid, &st, WNOHANG);
+            if (r == t[i].pid) { t[i].state = 2; t[i].exit_code = WEXITSTATUS(st); }
+            else if (r < 0 && errno == ECHILD) t[i].state = 2;
+            else left = 1;
+        }
+        if (!left) break;
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        double el = (double)(t1.tv_sec - t0.tv_sec) + (double)(t1.tv_nsec - t0.tv_nsec) / 1e9;
+        if (el >= 5.0) break;
+        struct timespec ts = { 0, 100000000 };
+        nanosleep(&ts, NULL);
+    }
+    for (int i = 0; i < nt; i++) if (t[i].state == 1 && t[i].pid > 0) kill(-t[i].pid, SIGKILL);
+    for (int i = 0; i < nt; i++) {
+        if (t[i].state == 1 && t[i].pid > 0) { int st; waitpid(t[i].pid, &st, 0); }
+        if (t[i].pipe_fd >= 0) { close(t[i].pipe_fd); t[i].pipe_fd = -1; }
+        if (t[i].started) task_remove_temps(pro, t[i].name);
+        t[i].state = 2;
+    }
+    return 130;
+}
+
 /* dna repack <dirs,...> --read 1|0 --auto 1|0 --format 0|1 --type 0|1|2 --br N --erofs N --mode lz4hc|lz4|lzma
  *            --compress 0|1 --delavb 0|1 --hal-fallback 0|1 --convert 0|1|2   (convert: 0 ext4, 1 erofs, 2 f2fs) */
 static int cmd_repack(int argc, char **argv) {
@@ -2644,37 +2814,108 @@ static int cmd_repack(int argc, char **argv) {
         o.erofs_workers = one.erofs_workers;
     }
     g_repack_quiet = !g_debug;
-    int fail = 0;
-    for (int i = 0; i < nn; i++) {
+    int parallel = perf.part_jobs > 1 && (ld.n_ext4 + ld.n_erofs + ld.n_f2fs) > 1;
+    if (!parallel) {
+        int fail = 0;
+        for (int i = 0; i < nn; i++) {
+            char *n = names[i]; size_t l = strlen(n); while (l && n[l - 1] == '/') n[--l] = 0;
+            if (!strcmp(n, "config") || !*n) continue;
+            char tree[4400], hdr[4600]; snprintf(tree, sizeof tree, "%s/%s", dro, n); snprintf(hdr, sizeof hdr, "%s/header", tree);
+            struct stat sb; if (stat(tree, &sb) || !S_ISDIR(sb.st_mode)) { fprintf(stderr, "> Error: %s not found\n", tree); fail = 1; continue; }
+            if (perf_wait_gate(&perf, 0)) { fail = 1; break; }
+            int is_boot = !access(hdr, R_OK);
+            const char *fmt = is_boot ? "boot" : (conv == 1 ? "erofs" : (conv == 2 ? "f2fs" : "ext4"));
+            printf("> Packing: %s <%s>\n", n, fmt); fflush(stdout);
+            if (repack_one(n, conv, &o, dro, pro, is_boot)) { fprintf(stderr, "> Failed: %s\n", n); fail = 1; }
+        }
+        return fail ? 1 : 0;
+    }
+
+    build_task_t *tasks = calloc(128, sizeof *tasks);
+    if (!tasks) return 1;
+    int nt = 0, nonboot = 0, fail = 0;
+    for (int i = 0; i < nn && nt < 128; i++) {
         char *n = names[i]; size_t l = strlen(n); while (l && n[l - 1] == '/') n[--l] = 0;
         if (!strcmp(n, "config") || !*n) continue;
         char tree[4400], hdr[4600]; snprintf(tree, sizeof tree, "%s/%s", dro, n); snprintf(hdr, sizeof hdr, "%s/header", tree);
-        struct stat sb; if (stat(tree, &sb) || !S_ISDIR(sb.st_mode)) { fprintf(stderr, "> Error: %s not found\n", tree); fail = 1; continue; }
-        if (perf_wait_gate(&perf, 0)) { fail = 1; break; }
-        int is_boot = !access(hdr, R_OK);
-        const char *fmt = is_boot ? "boot" : (conv == 1 ? "erofs" : (conv == 2 ? "f2fs" : "ext4"));
-        printf("> Packing: %s <%s>\n", n, fmt); fflush(stdout);
-        part_start();
-        int rc;
-        if (is_boot) rc = repack_boot(n, dro, pro);
-        else {
-            if (o.delavb) delavb_tree(tree, 0);
-            char cfgd[4400], fsc[4600], fcx[4600];
-            snprintf(cfgd, sizeof cfgd, "%s/config", dro);
-            snprintf(fsc, sizeof fsc, "%s/%s_fs_config", cfgd, n);
-            snprintf(fcx, sizeof fcx, "%s/%s_file_contexts", cfgd, n);
-            if (!access(fsc, R_OK)) {
-                size_t stale = fs_config_prune(tree, n, fsc);
-                fs_config_complete(tree, n, fsc);
-                if (stale) VPRINTF("> fs_config: %zu stale entries removed\n", stale);
-            }
-            if (!access(fcx, R_OK)) file_contexts_sync(dro, n, tree, fcx, o.hal_fallback);
-            if (conv == 1) rc = repack_erofs(n, dro, pro, &o);
-            else if (conv == 2) rc = repack_f2fs(n, dro, pro, &o);
-            else rc = repack_ext4(n, dro, pro, &o);
+        struct stat sb;
+        if (stat(tree, &sb) || !S_ISDIR(sb.st_mode)) { fprintf(stderr, "> Error: %s not found\n", tree); fail = 1; continue; }
+        build_task_t *t = &tasks[nt];
+        snprintf(t->name, sizeof t->name, "%s", n);
+        t->kind = !access(hdr, R_OK) ? 3 : conv;
+        t->pipe_fd = -1;
+        if (t->kind != 3) {
+            tstat_t st = { 0, 0 };
+            tree_stat(tree, &st, 0);
+            t->estimated_bytes = st.blocks * 4096;
+            nonboot++;
         }
-        if (rc) { fprintf(stderr, "> Failed: %s\n", n); fail = 1; }
+        nt++;
     }
+    if (nonboot > 1) qsort(tasks, (size_t)nonboot, sizeof *tasks, task_cmp_desc);
+    install_stop_handlers();
+    g_stop = 0;
+    int next = 0, active = 0, stop_new = 0;
+    build_task_t *active_t[128];
+    while (next < nt || active) {
+        if (g_stop) { int rc = tasks_cancel(tasks, nt, pro); free(tasks); return rc; }
+        if (stop_new && !active) break;
+        while (!stop_new && next < nt && active < perf.part_jobs) {
+            const char *reason = "";
+            gate_t g = perf_gate(&perf, active, &reason);
+            if (g == GATE_WAIT) {
+                if (active == 0) {
+                    if (perf_wait_gate(&perf, 0)) { fail = 1; stop_new = 1; }
+                }
+                break;
+            }
+            build_task_t *t = &tasks[next];
+            const char *fmt = t->kind == 3 ? "boot" : (t->kind == 1 ? "erofs" : (t->kind == 2 ? "f2fs" : "ext4"));
+            if (g_stop) break;
+            printf("> Packing: %s <%s>\n", t->name, fmt); fflush(stdout);
+            if (task_start(t, conv, &o, dro, pro, &perf)) {
+                fprintf(stderr, "> Error: cannot start task %s\n", t->name);
+                fail = 1; stop_new = 1; break;
+            }
+            next++;
+            active++;
+        }
+        if (!active) continue;
+        struct pollfd pf[128];
+        int m = 0;
+        for (int i = 0; i < nt; i++) {
+            if (tasks[i].state != 1) continue;
+            pf[m].fd = tasks[i].pipe_fd;
+            pf[m].events = POLLIN;
+            pf[m].revents = 0;
+            active_t[m] = &tasks[i];
+            m++;
+        }
+        if (m) poll(pf, (nfds_t)m, 1000);
+        for (int i = 0; i < nt; i++) {
+            if (tasks[i].state != 1) continue;
+            task_read(&tasks[i]);
+            int st;
+            pid_t r = waitpid(tasks[i].pid, &st, WNOHANG);
+            if (r == tasks[i].pid) {
+                tasks[i].state = 2;
+                tasks[i].finished = 1;
+                task_read(&tasks[i]);
+                if (tasks[i].pipe_fd >= 0) { close(tasks[i].pipe_fd); tasks[i].pipe_fd = -1; }
+                active--;
+                if (WIFSIGNALED(st)) {
+                    kill(-tasks[i].pid, SIGKILL);
+                    tasks[i].exit_code = 128 + WTERMSIG(st);
+                } else tasks[i].exit_code = WEXITSTATUS(st);
+                if (tasks[i].exit_code) {
+                    fprintf(stderr, "> Failed: %s\n", tasks[i].name);
+                    fail = 1;
+                    stop_new = 1;
+                }
+            }
+        }
+    }
+    free(tasks);
     return fail ? 1 : 0;
 }
 
