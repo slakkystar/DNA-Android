@@ -848,59 +848,201 @@ static int cmd_extract(int argc, char **argv) {
 
 /* ---------- native raw -> sparse writer ---------- */
 
-static int sp_flush(FILE *in, FILE *o, uint64_t start, uint64_t len, int zero, uint32_t *nchunks) {
-    if (!len) return 0;
-    const uint32_t bs = 4096;
+#ifndef SEEK_DATA
+#define SEEK_DATA 3
+#define SEEK_HOLE 4
+#endif
+
+#define SPARSE_BS 4096u
+#define SPARSE_DATA_CHUNK_BLOCKS 16384u
+#define SPARSE_ZERO_CHUNK_BLOCKS 0x7FFFFFFu
+
+typedef struct {
+    FILE *o;
+    uint64_t run_start;
+    uint32_t run_len;
+    int run_type;
+    uint8_t *data;
+    uint32_t data_len;
+    uint32_t chunks;
+    int err;
+} spw_t;
+
+static int spw_write(spw_t *w, const void *p, size_t n) {
+    if (w->err) return -1;
+    if (n && fwrite(p, 1, n, w->o) != n) { w->err = 1; return -1; }
+    return 0;
+}
+
+static int spw_data_chunk(spw_t *w, uint32_t blocks) {
     uint8_t ch[12] = {0xC1, 0xCA};
-    if (zero) ch[0] = 0xC3;
-    uint32_t n = (uint32_t)len, tot = 12 + (zero ? 0 : n * bs);
-    memcpy(ch + 4, &n, 4); memcpy(ch + 8, &tot, 4);
-    if (fwrite(ch, 1, 12, o) != 12) return -1;
-    if (!zero) {
-        uint8_t *buf = malloc(bs);
-        for (uint64_t i = 0; i < len; i++) {
-            memset(buf, 0, bs);
-            if (fseeko(in, (off_t)((start + i) * bs), SEEK_SET) != 0) { free(buf); return -1; }
-            size_t got = fread(buf, 1, bs, in);       /* short last block stays zero-padded */
-            (void)got;
-            if (fwrite(buf, 1, bs, o) != bs) { free(buf); return -1; }
+    uint64_t total = 12ull + (uint64_t)blocks * SPARSE_BS;
+    if (total > UINT32_MAX) { w->err = 1; return -1; }
+    uint32_t t = (uint32_t)total;
+    memcpy(ch + 4, &blocks, 4); memcpy(ch + 8, &t, 4);
+    if (spw_write(w, ch, 12)) return -1;
+    if (spw_write(w, w->data, (size_t)blocks * SPARSE_BS)) return -1;
+    w->chunks++;
+    return 0;
+}
+
+static int spw_zero_chunk(spw_t *w, uint32_t blocks) {
+    uint8_t ch[12] = {0xC3, 0xCA};
+    uint32_t t = 12;
+    memcpy(ch + 4, &blocks, 4); memcpy(ch + 8, &t, 4);
+    if (spw_write(w, ch, 12)) return -1;
+    w->chunks++;
+    return 0;
+}
+
+static int spw_flush(spw_t *w) {
+    if (!w->run_len) { w->run_type = -1; return 0; }
+    if (w->run_type == 1) {
+        uint32_t left = w->run_len;
+        uint32_t off = 0;
+        while (left) {
+            uint32_t n = left > SPARSE_DATA_CHUNK_BLOCKS ? SPARSE_DATA_CHUNK_BLOCKS : left;
+            if (spw_data_chunk(w, n)) return -1;
+            off += n; left -= n;
         }
-        free(buf);
+        (void)off;
+    } else {
+        uint32_t left = w->run_len;
+        while (left) {
+            uint32_t n = left > SPARSE_ZERO_CHUNK_BLOCKS ? SPARSE_ZERO_CHUNK_BLOCKS : left;
+            if (spw_zero_chunk(w, n)) return -1;
+            left -= n;
+        }
     }
-    (*nchunks)++;
+    w->run_len = 0;
+    w->data_len = 0;
+    w->run_type = -1;
+    return 0;
+}
+
+static int spw_add(spw_t *w, int zero, const uint8_t *blk) {
+    int t = zero ? 0 : 1;
+    if (w->run_type != t) {
+        if (spw_flush(w)) return -1;
+        w->run_type = t;
+    }
+    if (zero) {
+        if (w->run_len == SPARSE_ZERO_CHUNK_BLOCKS && spw_flush(w)) return -1;
+        w->run_start += w->run_len;
+        w->run_len++;
+    } else {
+        if (w->run_len == SPARSE_DATA_CHUNK_BLOCKS && spw_flush(w)) return -1;
+        if (w->run_type != 1) w->run_type = 1;
+        memcpy(w->data + (size_t)w->data_len * SPARSE_BS, blk, SPARSE_BS);
+        w->data_len++;
+        w->run_len++;
+    }
+    return 0;
+}
+
+static int read_at_full(int fd, uint8_t *buf, size_t n, uint64_t off, uint64_t size) {
+    size_t done = 0;
+    if (off >= size) { memset(buf, 0, n); return 0; }
+    uint64_t avail = size - off;
+    if (avail < n) {
+        memset(buf + avail, 0, n - (size_t)avail);
+        n = (size_t)avail;
+    }
+    while (done < n) {
+        ssize_t r = pread(fd, buf + done, n - done, (off_t)(off + done));
+        if (r < 0) { if (errno == EINTR) continue; return -1; }
+        if (r == 0) { memset(buf + done, 0, n - done); break; }
+        done += (size_t)r;
+    }
+    return 0;
+}
+
+static int sparse_feed_data(spw_t *w, int fd, uint64_t start_blk, uint64_t nblk, uint64_t size, uint8_t *buf, const uint8_t *zero) {
+    const uint64_t per = (4u << 20) / SPARSE_BS;
+    while (nblk) {
+        uint64_t n = nblk > per ? per : nblk;
+        uint64_t off = start_blk * SPARSE_BS;
+        if (read_at_full(fd, buf, (size_t)n * SPARSE_BS, off, size)) return -1;
+        for (uint64_t i = 0; i < n; i++) {
+            const uint8_t *blk = buf + i * SPARSE_BS;
+            int z = !memcmp(blk, zero, SPARSE_BS);
+            if (spw_add(w, z, blk)) return -1;
+        }
+        start_blk += n; nblk -= n;
+    }
     return 0;
 }
 
 static int raw_to_sparse(const char *src, const char *dst) {
-    FILE *in = fopen(src, "rb"); if (!in) return -1;
-    fseeko(in, 0, SEEK_END); uint64_t size = (uint64_t)ftello(in); rewind(in);
-    const uint32_t bs = 4096; uint64_t nblk = (size + bs - 1) / bs;
-    FILE *o = fopen(dst, "wb"); if (!o) { fclose(in); return -1; }
+    int fd = open(src, O_RDONLY);
+    if (fd < 0) return -1;
+    struct stat st;
+    if (fstat(fd, &st)) { close(fd); return -1; }
+    uint64_t size = (uint64_t)st.st_size;
+    uint64_t nblk = (size + SPARSE_BS - 1) / SPARSE_BS;
+    posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL);
+    FILE *o = fopen(dst, "wb");
+    if (!o) { close(fd); return -1; }
+    setvbuf(o, NULL, _IOFBF, 1u << 20);
     uint8_t hdr[28] = {0};
-    int rc = fwrite(hdr, 1, 28, o) == 28 ? 0 : -1;      /* placeholder, rewritten at the end */
-    uint8_t *blk = malloc(bs), *zero = calloc(1, bs);
-    uint32_t nchunks = 0; uint64_t run_start = 0, run_len = 0; int run_zero = -1;
-    for (uint64_t b = 0; b < nblk && !rc; b++) {
-        memset(blk, 0, bs);
-        size_t got = fread(blk, 1, bs, in); (void)got;
-        int z = !memcmp(blk, zero, bs);
-        if (z != run_zero || run_len >= 0x7FFFFFF) {
-            rc = sp_flush(in, o, run_start, run_len, run_zero, &nchunks);
-            fseeko(in, (off_t)((b + 1) * bs), SEEK_SET);   /* sp_flush moved the read position */
-            run_zero = z; run_start = b; run_len = 0;
+    int rc = fwrite(hdr, 1, 28, o) == 28 ? 0 : -1;
+    uint8_t *buf = malloc(4u << 20), *zero = calloc(1, SPARSE_BS);
+    uint8_t *run = malloc((size_t)SPARSE_DATA_CHUNK_BLOCKS * SPARSE_BS);
+    spw_t w; memset(&w, 0, sizeof w);
+    w.o = o; w.data = run; w.run_type = -1;
+    if (!buf || !zero || !run) rc = -1;
+    uint64_t next = 0;
+    int seek_ok = 1;
+    while (!rc && next < nblk) {
+        if (seek_ok) {
+            off_t d = lseek(fd, (off_t)(next * SPARSE_BS), SEEK_DATA);
+            if (d < 0) {
+                if (errno == ENXIO) {
+                    if (spw_flush(&w)) { rc = -1; break; }
+                    uint64_t rem = nblk - next;
+                    while (rem && !rc) {
+                        uint32_t n = rem > SPARSE_ZERO_CHUNK_BLOCKS ? SPARSE_ZERO_CHUNK_BLOCKS : (uint32_t)rem;
+                        rc = spw_zero_chunk(&w, n);
+                        rem -= n;
+                    }
+                    next = nblk;
+                    break;
+                }
+                seek_ok = 0;
+            } else {
+                uint64_t db = (uint64_t)d / SPARSE_BS;
+                if (db > next) {
+                    if (spw_flush(&w)) { rc = -1; break; }
+                    uint64_t z = db - next;
+                    while (z && !rc) {
+                        uint32_t n = z > SPARSE_ZERO_CHUNK_BLOCKS ? SPARSE_ZERO_CHUNK_BLOCKS : (uint32_t)z;
+                        rc = spw_zero_chunk(&w, n);
+                        z -= n;
+                    }
+                    next = db;
+                    if (next >= nblk) break;
+                }
+                off_t h = lseek(fd, (off_t)(next * SPARSE_BS), SEEK_HOLE);
+                uint64_t hb = h < 0 ? nblk : ((uint64_t)h + SPARSE_BS - 1) / SPARSE_BS;
+                if (hb > nblk) hb = nblk;
+                if (hb <= next) hb = nblk;
+                rc = sparse_feed_data(&w, fd, next, hb - next, size, buf, zero);
+                next = hb;
+                continue;
+            }
         }
-        run_len++;
-        fseeko(in, (off_t)((b + 1) * bs), SEEK_SET);
+        rc = sparse_feed_data(&w, fd, next, nblk - next, size, buf, zero);
+        next = nblk;
     }
-    if (!rc) rc = sp_flush(in, o, run_start, run_len, run_zero, &nchunks);
+    if (!rc) rc = spw_flush(&w);
     if (!rc) {
-        uint32_t magic = 0xED26FF3A, tb = (uint32_t)nblk, bsz = bs, zero32 = 0;
+        uint32_t magic = 0xED26FF3A, tb = (uint32_t)nblk, bsz = SPARSE_BS, zero32 = 0;
         uint16_t maj = 1, min = 0, fh = 28, ch = 12;
         rewind(o);
         fwrite(&magic, 4, 1, o); fwrite(&maj, 2, 1, o); fwrite(&min, 2, 1, o); fwrite(&fh, 2, 1, o);
-        fwrite(&ch, 2, 1, o); fwrite(&bsz, 4, 1, o); fwrite(&tb, 4, 1, o); fwrite(&nchunks, 4, 1, o); fwrite(&zero32, 4, 1, o);
+        fwrite(&ch, 2, 1, o); fwrite(&bsz, 4, 1, o); fwrite(&tb, 4, 1, o); fwrite(&w.chunks, 4, 1, o); fwrite(&zero32, 4, 1, o);
     }
-    free(blk); free(zero); fclose(in);
+    free(buf); free(zero); free(run); close(fd);
     if (fclose(o)) rc = -1;
     if (rc) remove(dst);
     return rc;
