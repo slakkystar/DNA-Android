@@ -2993,24 +2993,53 @@ static uint64_t meminfo_kb(const char *key) {
 
 
 static int payload_workers(void) {
+    perf_t p; perf_ovr_t ov; perf_load_t empty = { 0, 0, 0, 0, 0 };
+    perf_detect(&p);
+    perf_ovr_from_env(&ov);
+    perf_make_plan(&p, &empty, &ov);
     const char *env = getenv("DNA_PAYLOAD_WORKERS");
+    int n;
     if (env && *env) {
-        int n = atoi(env);
+        n = atoi(env);
         if (n < 1) n = 1;
         if (n > 8) n = 8;
-        return n;
+    } else {
+        uint64_t total = p.mem_total_kb, avail = p.mem_avail_kb;
+        long ncpu = sysconf(_SC_NPROCESSORS_ONLN);
+        if (total >= 5632ULL * 1024) n = 8;
+        else if (total >= 3072ULL * 1024) n = 4;
+        else n = 2;
+        if (total && total < 2048ULL * 1024) n = 1;
+        if (avail && avail < 256ULL * 1024) n = 1;
+        if (ncpu > 0 && n > ncpu) n = (int)ncpu;
+        if (avail) {
+            uint64_t mb = avail / 1024;
+            int cap;
+            if (mb > (uint64_t)ov.reserve_mb) cap = (int)((mb - (uint64_t)ov.reserve_mb) / 96); else cap = 1;
+            if (cap < 1) cap = 1;
+            if (n > cap) n = cap;
+        }
+        if (n > p.cpu_budget) n = p.cpu_budget;
+        int level = perf_thermal_level(&p);
+        if (level == 1 && n > 4) n = 4;
+        else if (level == 2 && n > 2) n = 2;
+        else if (level >= 3) n = 1;
+        if (p.psi_mem_avg10 > 12) { n /= 2; if (n < 1) n = 1; }
     }
-    uint64_t total = meminfo_kb("MemTotal");
-    uint64_t avail = meminfo_kb("MemAvailable");
-    long ncpu = sysconf(_SC_NPROCESSORS_ONLN);
-    int n;
-    if (total >= 5632ULL * 1024) n = 8;
-    else if (total >= 3072ULL * 1024) n = 4;
-    else n = 2;
-    if (total && total < 2048ULL * 1024) n = 1;
-    if (avail && avail < 256ULL * 1024) n = 1;
-    if (ncpu > 0 && n > ncpu) n = (int)ncpu;
     if (n < 1) n = 1;
+    if (n > 8) n = 8;
+    static int printed = 0;
+    if (!printed) {
+        printed = 1;
+        int tmax = p.temp_battery_c;
+        if (p.temp_skin_c > tmax) tmax = p.temp_skin_c;
+        if (p.temp_soc_c > tmax) tmax = p.temp_soc_c;
+        printf("> Payload mode: %s (%d workers, RAM %.1f/%.1f GiB, ",
+               profile_name(perf_select_class(&p)), n,
+               (double)p.mem_avail_kb / 1048576.0, (double)p.mem_total_kb / 1048576.0);
+        if (tmax) printf("%d°C)\n", tmax); else printf("n/a)\n");
+        fflush(stdout);
+    }
     return n;
 }
 
@@ -3365,14 +3394,6 @@ static int cmd_dumper(int argc, char **argv) {
         for (uint32_t i = 0; i < py.nparts; i++) puts(py.parts[i].name);
         pay_free(&py); return 0;
     }
-    {
-        int jobs = payload_workers();
-        printf("> Payload mode: %s (%d worker%s)\n",
-               jobs >= 6 ? "fast" : (jobs >= 3 ? "balanced" : "saver"),
-               jobs, jobs == 1 ? "" : "s");
-        fflush(stdout);
-    }
-
     int want = parts && *parts, found = 0, fail = 0, auto_fail = 0;
     for (uint32_t i = 0; i < py.nparts; i++) {
         if (want && !in_list(parts, py.parts[i].name)) continue;
