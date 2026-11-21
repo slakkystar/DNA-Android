@@ -41,10 +41,72 @@ static const char *g_sysroot = "";
 static int g_thermal_limit_hot = 0;
 static int g_nice = -100;
 static int g_ioprio = -1;
+static volatile sig_atomic_t g_wake_locked = 0;
+static int g_wake_atexit = 0;
+static const char *g_oom_path = "/proc/self/oom_score_adj";
 
 static const char *syspath(char *buf, size_t n, const char *rel) {
     snprintf(buf, n, "%s%s", g_sysroot, rel);
     return buf;
+}
+
+static void wake_unlock(void) {
+    if (!g_wake_locked) return;
+    g_wake_locked = 0;
+    char p[4096];
+    syspath(p, sizeof p, "/sys/power/wake_unlock");
+    int fd = open(p, O_WRONLY | O_CLOEXEC);
+    if (fd >= 0) { (void)write(fd, "dna-repack", 10); close(fd); }
+}
+
+static void start_wakelock(void) {
+    const char *e = getenv("DNA_WAKELOCK");
+    if (!e || strcmp(e, "1")) return;
+    char p[4096];
+    syspath(p, sizeof p, "/sys/power/wake_lock");
+    int fd = open(p, O_WRONLY | O_CLOEXEC);
+    if (fd < 0) return;
+    if (write(fd, "dna-repack", 10) != 10) { close(fd); return; }
+    close(fd);
+    g_wake_locked = 1;
+    if (!g_wake_atexit) { g_wake_atexit = 1; atexit(wake_unlock); }
+}
+
+static void cpuset_add_self(void) {
+    const char *name = getenv("DNA_CPUSET");
+    if (!name || !*name) return;
+    for (const char *q = name; *q; q++) {
+        if (!((*q >= 'A' && *q <= 'Z') || (*q >= 'a' && *q <= 'z') ||
+              (*q >= '0' && *q <= '9') || *q == '_' || *q == '-')) return;
+    }
+    char p[4096];
+    snprintf(p, sizeof p, "%s/dev/cpuset/%s/tasks", g_sysroot, name);
+    int fd = open(p, O_WRONLY | O_CLOEXEC);
+    if (fd < 0) return;
+    char b[32];
+    int n = snprintf(b, sizeof b, "%d\n", (int)getpid());
+    if (n > 0) (void)write(fd, b, (size_t)n);
+    close(fd);
+}
+
+static void oom_protect(void) {
+    const char *e = getenv("DNA_PROTECT");
+    if (!e || strcmp(e, "1")) return;
+    int v = -250;
+    const char *s = getenv("DNA_OOM_SCORE_ADJ");
+    if (s && *s) {
+        char *end = NULL;
+        long x = strtol(s, &end, 10);
+        if (end && !*end) v = (int)x;
+    }
+    if (v > 0) v = -250;
+    if (v < -300) v = -300;
+    int fd = open(g_oom_path, O_WRONLY | O_CLOEXEC);
+    if (fd < 0) return;
+    char b[32];
+    int n = snprintf(b, sizeof b, "%d\n", v);
+    if (n > 0) (void)write(fd, b, (size_t)n);
+    close(fd);
 }
 
 static uint64_t meminfo_kb(const char *key);
@@ -350,6 +412,7 @@ static int cmd_lpunpack(int argc, char **argv) {
 /* ---------- generic helpers ---------- */
 
 static void perf_child_setup(void) {
+    cpuset_add_self();
     if (g_nice != -100) setpriority(PRIO_PROCESS, 0, g_nice);
     if (g_ioprio >= 0) {
 #ifdef SYS_ioprio_set
@@ -2612,6 +2675,7 @@ static volatile sig_atomic_t g_stop = 0;
 static void stop_handler(int sig) {
     (void)sig;
     g_stop = 1;
+    wake_unlock();
 }
 
 static void install_stop_handlers(void) {
@@ -2676,6 +2740,7 @@ static int task_start(build_task_t *t, int conv, ropts_t *o, const char *dro, co
         if (getppid() == 1) _exit(1);
         signal(SIGINT, SIG_DFL);
         signal(SIGTERM, SIG_DFL);
+        cpuset_add_self();
         if (dup2(fds[1], STDOUT_FILENO) < 0 || dup2(fds[1], STDERR_FILENO) < 0) _exit(1);
         close(fds[1]);
         g_repack_quiet = !g_debug;
@@ -2743,7 +2808,7 @@ static int tasks_cancel(build_task_t *t, int nt, const char *pro) {
 
 /* dna repack <dirs,...> --read 1|0 --auto 1|0 --format 0|1 --type 0|1|2 --br N --erofs N --mode lz4hc|lz4|lzma
  *            --compress 0|1 --delavb 0|1 --hal-fallback 0|1 --convert 0|1|2   (convert: 0 ext4, 1 erofs, 2 f2fs) */
-static int cmd_repack(int argc, char **argv) {
+static int cmd_repack_impl(int argc, char **argv) {
     ropts_t o = { 1, 1, 0, 0, 0, 0, 0, 0, 0, "lz4hc", 0 }; int conv = 0;
     char *names[128]; int nn = 0;
     perf_ovr_t ov; perf_ovr_from_env(&ov);
@@ -2943,6 +3008,15 @@ static int cmd_repack(int argc, char **argv) {
     }
     free(tasks);
     return fail ? 1 : 0;
+}
+
+static int cmd_repack(int argc, char **argv) {
+    start_wakelock();
+    cpuset_add_self();
+    oom_protect();
+    int rc = cmd_repack_impl(argc, argv);
+    wake_unlock();
+    return rc;
 }
 
 /* ---------- SHA-256 (liblp checksums) ---------- */
@@ -3894,7 +3968,7 @@ static int dumper_one(pay_t *py, ppart_t *p, int auto_unpack, int delete_img, in
     return 0;
 }
 
-static int cmd_dumper(int argc, char **argv) {
+static int cmd_dumper_impl(int argc, char **argv) {
     const char *parts = NULL, *file = NULL;
     int list = 0, del = 0, autox = 0;
     signal(SIGPIPE, SIG_IGN);
@@ -3926,6 +4000,14 @@ static int cmd_dumper(int argc, char **argv) {
     pay_free(&py);
     if (!fail && !auto_fail && del) delete_path(full);
     return fail ? 1 : auto_fail;
+}
+
+static int cmd_dumper(int argc, char **argv) {
+    start_wakelock();
+    cpuset_add_self();
+    int rc = cmd_dumper_impl(argc, argv);
+    wake_unlock();
+    return rc;
 }
 
 /* ---------- unzip command ---------- */
