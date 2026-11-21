@@ -2170,6 +2170,12 @@ static uint64_t free_bytes_path(const char *path) {
     return (uint64_t)sv.f_bavail * (uint64_t)sv.f_frsize;
 }
 
+static uint64_t (*g_free_fn)(const char *path) = NULL;
+
+static uint64_t perf_free_bytes(const char *path) {
+    return g_free_fn ? g_free_fn(path) : free_bytes_path(path);
+}
+
 static void perf_detect(perf_t *p) {
     memset(p, 0, sizeof *p);
     p->mem_total_kb = meminfo_kb("MemTotal");
@@ -2221,12 +2227,12 @@ static void perf_detect(perf_t *p) {
     const char *tmp = getenv("DNA_TMP");
     if (!tmp || !*tmp) tmp = getenv("TMPDIR");
     if (!tmp || !*tmp) tmp = "/data/local/tmp";
-    p->free_tmp_bytes = free_bytes_path(tmp);
+    p->free_tmp_bytes = perf_free_bytes(tmp);
     const char *pro = getenv("DNA_PRO");
     if (pro && *pro) {
         char out[4096];
         snprintf(out, sizeof out, "%s/out", pro);
-        p->free_pro_bytes = free_bytes_path(out);
+        p->free_pro_bytes = perf_free_bytes(out);
     }
 }
 
@@ -2457,6 +2463,91 @@ static int perf_wait_gate(perf_t *p, int active_tasks) {
 static const char *profile_name(perf_class_t c);
 static const char *storage_name(storage_kind_t s);
 
+
+static int space_cmp_desc(const void *a, const void *b) {
+    uint64_t x = *(const uint64_t *)a, y = *(const uint64_t *)b;
+    return x < y ? 1 : (x > y ? -1 : 0);
+}
+
+static uint64_t estimate_repack_bytes(const char *name, const char *dro, int conv, const ropts_t *o) {
+    char tree[4400], inf[4600];
+    snprintf(tree, sizeof tree, "%s/%s", dro, name);
+    struct stat sb;
+    if (stat(tree, &sb) || !S_ISDIR(sb.st_mode)) return 0;
+    tstat_t st = { 0, 0 };
+    tree_stat(tree, &st, 0);
+    if (conv == 1 || conv == 2) return st.blocks * 4096;
+    uint64_t inodes = st.entries + st.entries / 20 + 64;
+    uint64_t est = (st.blocks + inodes * 256 / 4096) * 103 / 100 + 160;
+    uint64_t blocks;
+    if (o->autosize) blocks = est * 105 / 100 + 2048;
+    else {
+        snprintf(inf, sizeof inf, "%s/config/%s_info", dro, name);
+        uint64_t sz = read_u64_file(inf);
+        if (sz < 4096) blocks = est * 105 / 100 + 2048;
+        else blocks = sz / 4096;
+    }
+    return blocks * 4096;
+}
+
+static int perf_check_space(const char *pro, const char *dro, char *const *names, int nn, int conv, const ropts_t *o, int part_jobs) {
+    const char *skip = getenv("DNA_SPACE_CHECK");
+    if (skip && !strcmp(skip, "0")) return 0;
+    uint64_t est[128];
+    int n = 0;
+    for (int i = 0; i < nn && n < 128; i++) {
+        char name[512];
+        snprintf(name, sizeof name, "%s", names[i]);
+        size_t l = strlen(name);
+        while (l && name[l - 1] == '/') name[--l] = 0;
+        if (!strcmp(name, "config") || !*name) continue;
+        char hdr[4600];
+        snprintf(hdr, sizeof hdr, "%s/%s/header", dro, name);
+        if (!access(hdr, R_OK)) continue;
+        uint64_t e = estimate_repack_bytes(name, dro, conv, o);
+        if (e) est[n++] = e;
+    }
+    if (n > 1) qsort(est, (size_t)n, sizeof est[0], space_cmp_desc);
+    if (part_jobs < 1) part_jobs = 1;
+    if (part_jobs > n) part_jobs = n;
+    uint64_t sum_raw = 0, sum_both = 0;
+    uint64_t factor = o->out_kind == 2 ? 2 : 1;
+    for (int i = 0; i < part_jobs; i++) {
+        sum_raw += est[i];
+        sum_both += est[i] + est[i] * factor;
+    }
+    const uint64_t margin = 1ULL << 30;
+    char out[4400];
+    snprintf(out, sizeof out, "%s/out", pro);
+    uint64_t have_out = perf_free_bytes(out);
+    const char *tmp = getenv("DNA_TMP");
+    if (!tmp || !*tmp) tmp = getenv("TMPDIR");
+    int separate = 0;
+    uint64_t have_tmp = 0;
+    if (tmp && *tmp) {
+        struct stat a, b;
+        if (!stat(tmp, &a) && !stat(out, &b) && a.st_dev != b.st_dev) {
+            separate = 1;
+            have_tmp = perf_free_bytes(tmp);
+        }
+    }
+    uint64_t need_out = sum_both + margin + (separate ? 0 : sum_raw);
+    if (have_out < need_out) {
+        fprintf(stderr, "> Error: not enough free space in %s: need %llu MiB, have %llu MiB\n",
+                out, (unsigned long long)(need_out >> 20), (unsigned long long)(have_out >> 20));
+        return 1;
+    }
+    if (separate) {
+        uint64_t need_tmp = sum_raw + margin;
+        if (have_tmp < need_tmp) {
+            fprintf(stderr, "> Error: not enough free space in %s: need %llu MiB, have %llu MiB\n",
+                    tmp, (unsigned long long)(need_tmp >> 20), (unsigned long long)(have_tmp >> 20));
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* dna repack <dirs,...> --read 1|0 --auto 1|0 --format 0|1 --type 0|1|2 --br N --erofs N --mode lz4hc|lz4|lzma
  *            --compress 0|1 --delavb 0|1 --hal-fallback 0|1 --convert 0|1|2   (convert: 0 ext4, 1 erofs, 2 f2fs) */
 static int cmd_repack(int argc, char **argv) {
@@ -2520,6 +2611,7 @@ static int cmd_repack(int argc, char **argv) {
     if (tmax) printf("%d°C)\n", tmax); else printf("n/a)\n");
     printf("> Plan: %d jobs, erofs workers %d/job, nice %d, reserve %.1f GiB\n",
            perf.part_jobs, perf.erofs_workers, perf.nice_level, (double)perf.reserve_mb / 1024.0);
+    if (perf_check_space(pro, dro, names, nn, conv, &o, perf.part_jobs)) return 1;
     g_nice = perf.nice_level;
     g_ioprio = perf.cls == PERF_SAVER ? 7 : 4;
     if (ld.n_erofs > 0) {
