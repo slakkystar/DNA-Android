@@ -24,6 +24,7 @@
 #include <sys/prctl.h>
 #include <sys/syscall.h>
 #include <sys/sendfile.h>
+#include <sys/resource.h>
 #include <sched.h>
 #include <strings.h>
 #ifdef DNA_HAVE_XZ
@@ -38,6 +39,8 @@ static int g_repack_quiet = 0;
 static struct timespec g_part_t0;
 static const char *g_sysroot = "";
 static int g_thermal_limit_hot = 0;
+static int g_nice = -100;
+static int g_ioprio = -1;
 
 static const char *syspath(char *buf, size_t n, const char *rel) {
     snprintf(buf, n, "%s%s", g_sysroot, rel);
@@ -330,10 +333,20 @@ static int cmd_lpunpack(int argc, char **argv) {
 
 /* ---------- generic helpers ---------- */
 
+static void perf_child_setup(void) {
+    if (g_nice != -100) setpriority(PRIO_PROCESS, 0, g_nice);
+    if (g_ioprio >= 0) {
+#ifdef SYS_ioprio_set
+        syscall(SYS_ioprio_set, 1, 0, (2 << 13) | g_ioprio);
+#endif
+    }
+}
+
 static int run(char *const argv[]) {
     pid_t p = fork();
     if (p < 0) return -1;
     if (p == 0) {
+        perf_child_setup();
         if (g_repack_quiet) {
             int fd = open("/dev/null", O_WRONLY);
             if (fd >= 0) {
@@ -354,6 +367,7 @@ static int run_quiet(char *const argv[]) {
     pid_t p = fork();
     if (p < 0) return -1;
     if (p == 0) {
+        perf_child_setup();
         if (!g_debug) {
             int fd = open("/dev/null", O_WRONLY);
             if (fd >= 0) {
@@ -2449,6 +2463,8 @@ static int cmd_repack(int argc, char **argv) {
     if (tmax) printf("%d°C)\n", tmax); else printf("n/a)\n");
     printf("> Plan: %d jobs, erofs workers %d/job, nice %d, reserve %.1f GiB\n",
            perf.part_jobs, perf.erofs_workers, perf.nice_level, (double)perf.reserve_mb / 1024.0);
+    g_nice = perf.nice_level;
+    g_ioprio = perf.cls == PERF_SAVER ? 7 : 4;
     if (ld.n_erofs > 0) {
         perf_load_t seq = ld;
         seq.n_erofs = 1;
