@@ -25,6 +25,7 @@
 #include <sys/syscall.h>
 #include <sys/sendfile.h>
 #include <sched.h>
+#include <strings.h>
 #ifdef DNA_HAVE_XZ
 #include "xz.h"
 #endif
@@ -2651,6 +2652,138 @@ static int perf_thermal_level(const perf_t *p) {
         if (x > lvl) lvl = x;
     }
     return lvl;
+}
+
+
+typedef struct { int n_ext4, n_erofs, n_f2fs, n_boot; int out_kind; } perf_load_t;
+typedef struct {
+    int has_profile; perf_class_t profile;
+    int jobs, erofs_workers, brotli_jobs, zstd_threads, nice_level, reserve_mb;
+    int has_jobs, has_erofs_workers, has_brotli_jobs, has_zstd_threads, has_nice, has_reserve;
+} perf_ovr_t;
+
+static int env_int(const char *name, int lo, int hi, int *out) {
+    const char *s = getenv(name);
+    if (!s || !*s) return 0;
+    char *e = NULL;
+    long v = strtol(s, &e, 10);
+    if (!e || *e || v < lo || v > hi) return 0;
+    *out = (int)v;
+    return 1;
+}
+
+static void perf_ovr_from_env(perf_ovr_t *o) {
+    memset(o, 0, sizeof *o);
+    const char *pf = getenv("DNA_PERF");
+    if (pf && *pf && strcmp(pf, "auto") && strcmp(pf, "AUTO")) {
+        if (!strcasecmp(pf, "saver")) { o->has_profile = 1; o->profile = PERF_SAVER; }
+        else if (!strcasecmp(pf, "balanced")) { o->has_profile = 1; o->profile = PERF_BALANCED; }
+        else if (!strcasecmp(pf, "fast")) { o->has_profile = 1; o->profile = PERF_FAST; }
+        else if (!strcasecmp(pf, "turbo")) { o->has_profile = 1; o->profile = PERF_TURBO; }
+    }
+    o->has_jobs = env_int("DNA_JOBS", 1, 32, &o->jobs);
+    o->has_erofs_workers = env_int("DNA_EROFS_WORKERS", 1, 32, &o->erofs_workers);
+    o->has_brotli_jobs = env_int("DNA_BROTLI_JOBS", 1, 32, &o->brotli_jobs);
+    o->has_zstd_threads = env_int("DNA_ZSTD_THREADS", 1, 32, &o->zstd_threads);
+    o->has_nice = env_int("DNA_NICE", -20, 19, &o->nice_level);
+    o->has_reserve = env_int("DNA_MEM_RESERVE_MB", 0, 65536, &o->reserve_mb);
+}
+
+static perf_class_t perf_select_class(const perf_t *p) {
+    int level = perf_thermal_level(p);
+    uint64_t mib = 1024ULL;
+    int avail_small = p->mem_avail_kb && p->mem_avail_kb < 512 * mib;
+    if (p->mem_total_kb < 3 * 1024 * mib || avail_small || p->ncpu_online <= 2 || level >= 2) return PERF_SAVER;
+    avail_small = p->mem_avail_kb && p->mem_avail_kb < 1536 * mib;
+    if (p->mem_total_kb < 6 * 1024 * mib || p->ncpu_online <= 4 || avail_small || level >= 1) return PERF_BALANCED;
+    avail_small = p->mem_avail_kb && p->mem_avail_kb < 2560 * mib;
+    if (p->mem_total_kb < 8 * 1024 * mib || p->ncpu_online < 8 || avail_small) return PERF_FAST;
+    if (p->mem_avail_kb >= 3 * 1024 * mib && level == 0) return PERF_TURBO;
+    return PERF_FAST;
+}
+
+static void perf_make_plan(perf_t *p, const perf_load_t *ld, const perf_ovr_t *ov) {
+    perf_class_t cls = ov->has_profile ? ov->profile : perf_select_class(p);
+    int pj, tcpu, nice, reserve, br, zstd, emax;
+    switch (cls) {
+    case PERF_SAVER:    pj = 1; tcpu = p->cpu_budget < 2 ? p->cpu_budget : 2; nice = 10; reserve = 768;  br = 1; zstd = p->cpu_budget < 2 ? p->cpu_budget : 2; emax = 2; break;
+    case PERF_FAST:     pj = 3; tcpu = p->cpu_budget < 8 ? p->cpu_budget : 8; nice = 0;  reserve = 1024; br = 3; zstd = p->ncpu_online - 1; emax = 8; break;
+    case PERF_TURBO:    pj = 4; tcpu = p->cpu_budget < 12 ? p->cpu_budget : 12; nice = 0; reserve = 1024; br = 4; zstd = p->ncpu_online - 1; emax = 12; break;
+    case PERF_BALANCED:
+    case PERF_MANUAL:
+    default:            pj = 2; tcpu = p->cpu_budget < 4 ? p->cpu_budget : 4; nice = 5; reserve = 768; br = 2; zstd = p->ncpu_online < 4 ? p->ncpu_online : 4; emax = 4; break;
+    }
+    if (zstd < 1) zstd = 1;
+    if (cls == PERF_FAST || cls == PERF_TURBO) {
+        zstd = p->ncpu_online - 1;
+        if (zstd < 1) zstd = 1;
+        int cap = cls == PERF_FAST ? 6 : 8;
+        if (zstd > cap) zstd = cap;
+    }
+    int cpu_b = p->cpu_budget < tcpu ? p->cpu_budget : tcpu;
+    if (cpu_b < 1) cpu_b = 1;
+    p->cls = cls;
+    p->total_cpu_threads = tcpu;
+    p->nice_level = nice;
+    p->reserve_mb = reserve;
+    int n = ld->n_ext4 + ld->n_erofs + ld->n_f2fs;
+    if (n == 0) {
+        p->part_jobs = 1; p->erofs_workers = 1; p->brotli_jobs = 1; p->zstd_threads = zstd;
+    } else {
+        int storage_cap = p->storage == STORAGE_EMMC ? 2 : (p->storage == STORAGE_UFS ? 4 : 32);
+        int part = pj < n ? pj : n;
+        if (part > storage_cap) part = storage_cap;
+        int erofs;
+        if (n == 1 && ld->n_erofs == 1) { part = 1; erofs = cpu_b; }
+        else {
+            int half = cpu_b / 2; if (half < 1) half = 1;
+            if (part > half) part = half;
+            erofs = cpu_b / part; if (erofs < 1) erofs = 1;
+        }
+        if (erofs > emax) erofs = emax;
+        uint64_t total_mb = p->mem_total_kb / 1024, avail_mb = p->mem_avail_kb / 1024;
+        uint64_t cap_total = total_mb * 55 / 100;
+        uint64_t budget;
+        if (p->mem_avail_kb) {
+            if (avail_mb > (uint64_t)reserve) budget = avail_mb - (uint64_t)reserve; else budget = 0;
+            if (budget > cap_total) budget = cap_total;
+        } else budget = cap_total;
+        int per_job = 0;
+        if (ld->n_ext4) per_job = 384;
+        if (ld->n_f2fs && per_job < 384) per_job = 384;
+        if (ld->n_erofs) { int e = 96 * erofs; if (e > per_job) per_job = e; }
+        if (per_job < 1) per_job = 1;
+        int mb_erofs = (int)(budget / 96); if (mb_erofs < 1) mb_erofs = 1;
+        if (erofs > mb_erofs) erofs = mb_erofs;
+        int mb_jobs = (int)(budget / (uint64_t)per_job); if (mb_jobs < 1) mb_jobs = 1;
+        if (part > mb_jobs) part = mb_jobs;
+        if (ld->n_erofs == n && part > 1) {
+            int e = cpu_b / part; if (e < 1) e = 1;
+            if (erofs > e) erofs = e;
+        }
+        if (erofs < 1) erofs = 1;
+        if (part < 1) part = 1;
+        p->part_jobs = part;
+        p->erofs_workers = erofs;
+        int mb_buf = (int)(budget / 96); if (mb_buf < 1) mb_buf = 1;
+        int brb = br < n ? br : n;
+        if (brb > mb_buf) brb = mb_buf;
+        if (brb < 1) brb = 1;
+        p->brotli_jobs = brb;
+        p->zstd_threads = zstd;
+    }
+    if (ov->has_jobs) p->part_jobs = ov->jobs;
+    if (ov->has_erofs_workers) p->erofs_workers = ov->erofs_workers;
+    if (ov->has_brotli_jobs) p->brotli_jobs = ov->brotli_jobs;
+    if (ov->has_zstd_threads) p->zstd_threads = ov->zstd_threads;
+    if (ov->has_nice) p->nice_level = ov->nice_level;
+    if (ov->has_reserve) p->reserve_mb = ov->reserve_mb;
+    int maxn = n > 0 ? n : 1;
+    if (p->part_jobs > maxn) p->part_jobs = maxn;
+    if (p->part_jobs < 1) p->part_jobs = 1;
+    if (p->erofs_workers < 1) p->erofs_workers = 1;
+    if (p->brotli_jobs < 1) p->brotli_jobs = 1;
+    if (p->zstd_threads < 1) p->zstd_threads = 1;
 }
 
 static int payload_workers(void) {
