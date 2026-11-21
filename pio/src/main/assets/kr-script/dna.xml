@@ -80,7 +80,7 @@
 <group title="Pack Menu">
     <action interruptible="false">
         <title>Pack a single partition</title>
-        <set>dna repack $IMG_DIR --read $Read --auto $Pack --format $img_type --type $repack_from --br $brze --erofs $erofsze --mode $type --compress $test --hal-fallback $hal_fallback --convert $tool</set>
+        <set>dna repack $IMG_DIR --read $Read --auto $Pack --format $img_type --type $repack_from --br $brze --erofs $erofsze --mode $type --compress $test --hal-fallback $hal_fallback --convert $tool --profile $perf</set>
         <param name="IMG_DIR" options-sh="samples/findfile.sh dir" desc="IMG packing format will be automatically detected" separator="," required="true" multiple="true"/>
         <param name="tool" label="Pack type">
              <option value="0"> ext4 </option>
@@ -113,6 +113,14 @@
         </param>
         <param name="test" label="Compress ext4 img space" desc="Note: only used when packing to ext4" type="switch" />
         <param name="hal_fallback" label="Fallback to hal_allocator_default_exec" value="1" desc="Note: applies only to newly added bin/hw files whose HAL type is not found in .cil. Disable to keep the partition default context instead." type="switch" />
+        <param name="perf" label="Performance" value="auto"
+               desc="Auto selects jobs and workers from RAM, CPU and temperature. Compression quality is unchanged.">
+            <option value="auto">Auto</option>
+            <option value="saver">Saver</option>
+            <option value="balanced">Balanced</option>
+            <option value="fast">Fast</option>
+            <option value="turbo">Turbo</option>
+        </param>
     </action>
 
     <action interruptible="false">

@@ -86,6 +86,22 @@
     </text>
 
     <text>
+        <slice size="20" bold="true" break="true">Performance</slice>
+        <slice break="true">Auto does not change compression levels. It selects only parallelism: the number of partition tasks and worker threads. On a weak device packing is slower, but safer.</slice>
+        <slice bold="true" break="true">Auto</slice>
+        <slice break="true">Detects RAM, CPU, storage and temperature, then chooses a safe profile automatically.</slice>
+        <slice bold="true" break="true">Saver</slice>
+        <slice break="true">Fewest parallel tasks and workers, for low-memory or hot devices.</slice>
+        <slice bold="true" break="true">Balanced</slice>
+        <slice break="true">Moderate parallelism for everyday packing.</slice>
+        <slice bold="true" break="true">Fast</slice>
+        <slice break="true">More parallel tasks for capable devices.</slice>
+        <slice bold="true" break="true">Turbo</slice>
+        <slice break="true">Maximum parallelism; intended for powerful, cool devices.</slice>
+        <slice break="true" color="#ff9500">Choosing a profile explicitly overrides automatic detection.</slice>
+    </text>
+
+    <text>
         <slice size="20" bold="true" break="true">Packing super.img</slice>
         <slice break="true">A separate packing of the dynamic super partition, which combines logical partitions (system, vendor, product, etc.)</slice>
     </text>
