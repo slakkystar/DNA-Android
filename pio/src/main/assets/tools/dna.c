@@ -37,11 +37,14 @@ static int g_debug = 0;
 static int g_repack_quiet = 0;
 static struct timespec g_part_t0;
 static const char *g_sysroot = "";
+static int g_thermal_limit_hot = 0;
 
 static const char *syspath(char *buf, size_t n, const char *rel) {
     snprintf(buf, n, "%s%s", g_sysroot, rel);
     return buf;
 }
+
+static uint64_t meminfo_kb(const char *key);
 
 #define VPRINTF(...) do { if (g_debug) printf(__VA_ARGS__); } while (0)
 #define VWARN(...) do { if (g_debug) fprintf(stderr, __VA_ARGS__); } while (0)
@@ -1183,6 +1186,7 @@ static int read_opt(const char *path, const char *key, char *out, size_t n) {
 typedef struct {
     int rw, autosize, sparse, out_kind, brlvl, erofslvl, shrink, delavb, hal_fallback;
     char mode[16];
+    int erofs_workers;
 } ropts_t;
 
 static void avb_strip_line(char *line) {
@@ -1919,14 +1923,18 @@ static int repack_erofs(const char *name, const char *dro, const char *pro, cons
     if (!strcmp(o->mode, "lz4")) snprintf(comp, sizeof comp, "-zlz4");
     else if (!strcmp(o->mode, "lzma")) snprintf(comp, sizeof comp, "-zlzma,%d", lvl > 0 ? lvl : 6);
     else snprintf(comp, sizeof comp, "-zlz4hc,%d", lvl > 0 ? lvl : 9);
-    char *a[20]; int k = 0;
+    char *a[24]; int k = 0;
     a[k++] = "mkfs.erofs"; a[k++] = comp; a[k++] = "-T"; a[k++] = "0";
+    char wb[32];
+    if (o->erofs_workers > 0) { snprintf(wb, sizeof wb, "--workers=%d", o->erofs_workers); a[k++] = wb; }
     if (uuid[0]) { snprintf(ub, sizeof ub, "%s", uuid); a[k++] = "-U"; a[k++] = ub; }
     a[k++] = mp;
     snprintf(fsb, sizeof fsb, "--fs-config-file=%s", fsc); if (!access(fsc, R_OK)) a[k++] = fsb;
     snprintf(fcb, sizeof fcb, "--file-contexts=%s", fcx); if (!access(fcx, R_OK)) a[k++] = fcb;
     a[k++] = raw; a[k++] = tree; a[k] = NULL;
-    VPRINTF("> Building <erofs> (%s): %s\n", comp, name); fflush(stdout);
+    if (o->erofs_workers > 0) VPRINTF("> Building <erofs> (%s): %s, %d workers\n", comp, name, o->erofs_workers);
+    else VPRINTF("> Building <erofs> (%s): %s\n", comp, name);
+    fflush(stdout);
     remove(raw);
     if (run_quiet(a)) { fprintf(stderr, "> Error: mkfs.erofs failed\n"); remove(raw); return 1; }
     if (finish_output(raw, final, o)) return 1;
@@ -2006,11 +2014,384 @@ static int repack_boot(const char *name, const char *dro, const char *pro) {
     return rc;
 }
 
+typedef enum { PERF_SAVER = 0, PERF_BALANCED, PERF_FAST, PERF_TURBO, PERF_MANUAL } perf_class_t;
+typedef enum { STORAGE_UNKNOWN = 0, STORAGE_EMMC, STORAGE_UFS, STORAGE_NVME, STORAGE_OTHER } storage_kind_t;
+
+typedef struct {
+    uint64_t mem_total_kb, mem_avail_kb, swap_total_kb, swap_free_kb;
+    int ncpu_online, ncpu_conf, big_cores, little_cores, cpu_budget;
+    storage_kind_t storage;
+    int temp_battery_c, temp_skin_c, temp_soc_c;
+    int psi_mem_avg10, psi_cpu_avg10, psi_io_avg10;
+    uint64_t free_tmp_bytes, free_pro_bytes;
+    perf_class_t cls;
+    int part_jobs, total_cpu_threads, erofs_workers, brotli_jobs, zstd_threads, nice_level, reserve_mb;
+} perf_t;
+
+static uint64_t read_u64_path(const char *path) {
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+    unsigned long long v = 0;
+    if (fscanf(f, "%llu", &v) != 1) v = 0;
+    fclose(f);
+    return v;
+}
+
+static int read_text_path(const char *path, char *out, size_t n) {
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+    out[0] = 0;
+    if (!fgets(out, (int)n, f)) { fclose(f); return 0; }
+    fclose(f);
+    out[strcspn(out, "\r\n")] = 0;
+    return 1;
+}
+
+static int lower_has(const char *s, const char *needle) {
+    char a[128], b[128];
+    size_t i;
+    for (i = 0; s[i] && i + 1 < sizeof a; i++) a[i] = (char)tolower((unsigned char)s[i]);
+    a[i] = 0;
+    for (i = 0; needle[i] && i + 1 < sizeof b; i++) b[i] = (char)tolower((unsigned char)needle[i]);
+    b[i] = 0;
+    return strstr(a, b) != NULL;
+}
+
+static int norm_temp(long v) {
+    if (v > 1000) v /= 1000;
+    else if (v > 150) v /= 10;
+    if (v < -20 || v > 150) return 0;
+    return (int)v;
+}
+
+static int dir_has_prefix(const char *dir, const char *prefix) {
+    DIR *d = opendir(dir);
+    if (!d) return 0;
+    struct dirent *de;
+    int found = 0;
+    size_t pl = strlen(prefix);
+    while ((de = readdir(d))) {
+        if (!strncmp(de->d_name, prefix, pl)) { found = 1; break; }
+    }
+    closedir(d);
+    return found;
+}
+
+static int dir_has_substr(const char *dir, const char *needle) {
+    DIR *d = opendir(dir);
+    if (!d) return 0;
+    struct dirent *de;
+    int found = 0;
+    while ((de = readdir(d))) {
+        if (strstr(de->d_name, needle)) { found = 1; break; }
+    }
+    closedir(d);
+    return found;
+}
+
+static int storage_detect(void) {
+    char p[4096];
+    if (!access(syspath(p, sizeof p, "/sys/block/mmcblk0"), F_OK)) return STORAGE_EMMC;
+    if (!access(syspath(p, sizeof p, "/sys/block/nvme0n1"), F_OK)) return STORAGE_NVME;
+    int sda = !access(syspath(p, sizeof p, "/sys/block/sda"), F_OK);
+    char cls[4096], plat[4096];
+    syspath(cls, sizeof cls, "/sys/class");
+    syspath(plat, sizeof plat, "/sys/devices/platform");
+    if (sda && (dir_has_prefix(cls, "ufs") || dir_has_substr(plat, "ufs"))) return STORAGE_UFS;
+    if (!access(syspath(p, sizeof p, "/sys/block"), F_OK) && dir_has_prefix(syspath(p, sizeof p, "/sys/block"), "s")) return STORAGE_OTHER;
+    if (!access(syspath(p, sizeof p, "/sys/block/mmcblk"), F_OK)) return STORAGE_OTHER;
+    DIR *d = opendir(syspath(p, sizeof p, "/sys/block"));
+    if (!d) return STORAGE_UNKNOWN;
+    struct dirent *de;
+    int any = 0;
+    while ((de = readdir(d))) if (de->d_name[0] != '.') { any = 1; break; }
+    closedir(d);
+    return any ? STORAGE_OTHER : STORAGE_UNKNOWN;
+}
+
+static void thermal_scan(int *battery, int *skin, int *soc) {
+    char dir[4096], p[4096], type[128];
+    syspath(dir, sizeof dir, "/sys/class/thermal");
+    DIR *d = opendir(dir);
+    if (d) {
+        struct dirent *de;
+        while ((de = readdir(d))) {
+            if (strncmp(de->d_name, "thermal_zone", 12)) continue;
+            snprintf(p, sizeof p, "%s/%s/type", dir, de->d_name);
+            if (!read_text_path(p, type, sizeof type)) continue;
+            snprintf(p, sizeof p, "%s/%s/temp", dir, de->d_name);
+            int t = norm_temp((long)read_u64_path(p));
+            if (!t) continue;
+            if (lower_has(type, "battery") || lower_has(type, "bms")) { if (t > *battery) *battery = t; }
+            else if (lower_has(type, "skin") || lower_has(type, "quiet_therm") || lower_has(type, "xo_therm") || lower_has(type, "case")) { if (t > *skin) *skin = t; }
+            else if (lower_has(type, "cpu") || lower_has(type, "gpu") || lower_has(type, "soc") || lower_has(type, "cpuss") || lower_has(type, "mtktscpu")) { if (t > *soc) *soc = t; }
+        }
+        closedir(d);
+    }
+    if (!*battery) {
+        syspath(p, sizeof p, "/sys/class/power_supply/battery/temp");
+        int t = norm_temp((long)read_u64_path(p));
+        if (t) *battery = t;
+    }
+}
+
+static int psi_read(const char *rel) {
+    char p[4096], line[512];
+    FILE *f = fopen(syspath(p, sizeof p, rel), "r");
+    if (!f) return 0;
+    int v = 0;
+    while (fgets(line, sizeof line, f)) {
+        if (strncmp(line, "some", 4)) continue;
+        char *a = strstr(line, "avg10=");
+        if (a) { double d = strtod(a + 6, NULL); if (d > 0) v = (int)d; }
+        break;
+    }
+    fclose(f);
+    return v;
+}
+
+static uint64_t free_bytes_path(const char *path) {
+    struct statvfs sv;
+    if (!path || !*path || statvfs(path, &sv)) return 0;
+    return (uint64_t)sv.f_bavail * (uint64_t)sv.f_frsize;
+}
+
+static void perf_detect(perf_t *p) {
+    memset(p, 0, sizeof *p);
+    p->mem_total_kb = meminfo_kb("MemTotal");
+    p->mem_avail_kb = meminfo_kb("MemAvailable");
+    if (!p->mem_avail_kb) p->mem_avail_kb = meminfo_kb("MemFree") + meminfo_kb("Buffers") + meminfo_kb("Cached");
+    p->swap_total_kb = meminfo_kb("SwapTotal");
+    p->swap_free_kb = meminfo_kb("SwapFree");
+
+    long on = sysconf(_SC_NPROCESSORS_ONLN), conf = sysconf(_SC_NPROCESSORS_CONF);
+    p->ncpu_online = on > 0 ? (int)on : 1;
+    p->ncpu_conf = conf > 0 ? (int)conf : p->ncpu_online;
+    cpu_set_t set;
+    if (sched_getaffinity(0, sizeof set, &set) == 0) {
+        int n = CPU_COUNT(&set);
+        if (n > 0 && n < p->ncpu_online) p->ncpu_online = n;
+    }
+    uint64_t caps[256] = {0};
+    int have[256] = {0}, maxc = 0;
+    int limit = p->ncpu_conf > 256 ? 256 : p->ncpu_conf;
+    for (int i = 0; i < limit; i++) {
+        char path[4096];
+        snprintf(path, sizeof path, "%s/sys/devices/system/cpu/cpu%d/cpu_capacity", g_sysroot, i);
+        uint64_t v = read_u64_path(path);
+        if (!v) {
+            snprintf(path, sizeof path, "%s/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_max_freq", g_sysroot, i);
+            v = read_u64_path(path);
+        }
+        if (v) { caps[i] = v; have[i] = 1; if ((int)v > maxc) maxc = (int)v; }
+    }
+    if (!maxc) {
+        p->big_cores = p->ncpu_online;
+    } else {
+        for (int i = 0; i < limit; i++) if (have[i]) {
+            if ((int)caps[i] * 4 >= maxc * 3) p->big_cores++;
+            else p->little_cores++;
+        }
+    }
+    p->cpu_budget = p->big_cores + p->little_cores / 2;
+    if (p->cpu_budget > p->ncpu_online - 1) p->cpu_budget = p->ncpu_online - 1;
+    if (p->cpu_budget < 1) p->cpu_budget = 1;
+    if (p->cpu_budget > 12) p->cpu_budget = 12;
+
+    p->storage = (storage_kind_t)storage_detect();
+    thermal_scan(&p->temp_battery_c, &p->temp_skin_c, &p->temp_soc_c);
+    p->psi_mem_avg10 = psi_read("/proc/pressure/memory");
+    p->psi_cpu_avg10 = psi_read("/proc/pressure/cpu");
+    p->psi_io_avg10 = psi_read("/proc/pressure/io");
+
+    const char *tmp = getenv("DNA_TMP");
+    if (!tmp || !*tmp) tmp = getenv("TMPDIR");
+    if (!tmp || !*tmp) tmp = "/data/local/tmp";
+    p->free_tmp_bytes = free_bytes_path(tmp);
+    const char *pro = getenv("DNA_PRO");
+    if (pro && *pro) {
+        char out[4096];
+        snprintf(out, sizeof out, "%s/out", pro);
+        p->free_pro_bytes = free_bytes_path(out);
+    }
+}
+
+static void thermal_thresholds(const char *env, int dw, int dh, int dc, int *w, int *h, int *c) {
+    *w = dw; *h = dh; *c = dc;
+    const char *s = getenv(env);
+    if (!s || !*s) return;
+    int a, b, d;
+    char tail;
+    if (sscanf(s, "%d,%d,%d%c", &a, &b, &d, &tail) != 3) return;
+    if (!(a < b && b < d) || a < -50 || d > 200) return;
+    *w = a; *h = b; *c = d;
+}
+
+static int perf_thermal_level(const perf_t *p) {
+    int bw, bh, bc, sw, sh, sc, ow, oh, oc;
+    thermal_thresholds("DNA_THERMAL_BATTERY", 40, 43, 46, &bw, &bh, &bc);
+    thermal_thresholds("DNA_THERMAL_SKIN", 42, 45, 48, &sw, &sh, &sc);
+    thermal_thresholds("DNA_THERMAL_SOC", 80, 90, 98, &ow, &oh, &oc);
+    if (g_thermal_limit_hot > 0) {
+        int h = g_thermal_limit_hot;
+        bw = sw = ow = h - 5; bh = sh = oh = h; bc = sc = oc = h + 8;
+    }
+    int lvl = 0;
+    int vals[3] = { p->temp_battery_c, p->temp_skin_c, p->temp_soc_c };
+    int th[3][3] = { { bw, bh, bc }, { sw, sh, sc }, { ow, oh, oc } };
+    for (int i = 0; i < 3; i++) {
+        if (!vals[i]) continue;
+        int x = 0;
+        if (vals[i] >= th[i][2]) x = 3;
+        else if (vals[i] >= th[i][1]) x = 2;
+        else if (vals[i] >= th[i][0]) x = 1;
+        if (x > lvl) lvl = x;
+    }
+    return lvl;
+}
+
+
+typedef struct { int n_ext4, n_erofs, n_f2fs, n_boot; int out_kind; } perf_load_t;
+typedef struct {
+    int has_profile; perf_class_t profile;
+    int jobs, erofs_workers, brotli_jobs, zstd_threads, nice_level, reserve_mb;
+    int has_jobs, has_erofs_workers, has_brotli_jobs, has_zstd_threads, has_nice, has_reserve;
+} perf_ovr_t;
+
+static int env_int(const char *name, int lo, int hi, int *out) {
+    const char *s = getenv(name);
+    if (!s || !*s) return 0;
+    char *e = NULL;
+    long v = strtol(s, &e, 10);
+    if (!e || *e || v < lo || v > hi) return 0;
+    *out = (int)v;
+    return 1;
+}
+
+static void perf_ovr_from_env(perf_ovr_t *o) {
+    memset(o, 0, sizeof *o);
+    const char *pf = getenv("DNA_PERF");
+    if (pf && *pf && strcmp(pf, "auto") && strcmp(pf, "AUTO")) {
+        if (!strcasecmp(pf, "saver")) { o->has_profile = 1; o->profile = PERF_SAVER; }
+        else if (!strcasecmp(pf, "balanced")) { o->has_profile = 1; o->profile = PERF_BALANCED; }
+        else if (!strcasecmp(pf, "fast")) { o->has_profile = 1; o->profile = PERF_FAST; }
+        else if (!strcasecmp(pf, "turbo")) { o->has_profile = 1; o->profile = PERF_TURBO; }
+    }
+    o->has_jobs = env_int("DNA_JOBS", 1, 32, &o->jobs);
+    o->has_erofs_workers = env_int("DNA_EROFS_WORKERS", 1, 32, &o->erofs_workers);
+    o->has_brotli_jobs = env_int("DNA_BROTLI_JOBS", 1, 32, &o->brotli_jobs);
+    o->has_zstd_threads = env_int("DNA_ZSTD_THREADS", 1, 32, &o->zstd_threads);
+    o->has_nice = env_int("DNA_NICE", -20, 19, &o->nice_level);
+    o->has_reserve = env_int("DNA_MEM_RESERVE_MB", 0, 65536, &o->reserve_mb);
+}
+
+static perf_class_t perf_select_class(const perf_t *p) {
+    int level = perf_thermal_level(p);
+    uint64_t mib = 1024ULL;
+    int avail_small = p->mem_avail_kb && p->mem_avail_kb < 512 * mib;
+    if (p->mem_total_kb < 3 * 1024 * mib || avail_small || p->ncpu_online <= 2 || level >= 2) return PERF_SAVER;
+    avail_small = p->mem_avail_kb && p->mem_avail_kb < 1536 * mib;
+    if (p->mem_total_kb < 6 * 1024 * mib || p->ncpu_online <= 4 || avail_small || level >= 1) return PERF_BALANCED;
+    avail_small = p->mem_avail_kb && p->mem_avail_kb < 2560 * mib;
+    if (p->mem_total_kb < 8 * 1024 * mib || p->ncpu_online < 8 || avail_small) return PERF_FAST;
+    if (p->mem_avail_kb >= 3 * 1024 * mib && level == 0) return PERF_TURBO;
+    return PERF_FAST;
+}
+
+static void perf_make_plan(perf_t *p, const perf_load_t *ld, const perf_ovr_t *ov) {
+    perf_class_t cls = ov->has_profile ? ov->profile : perf_select_class(p);
+    int pj, tcpu, nice, reserve, br, zstd, emax;
+    switch (cls) {
+    case PERF_SAVER:    pj = 1; tcpu = p->cpu_budget < 2 ? p->cpu_budget : 2; nice = 10; reserve = 768;  br = 1; zstd = p->cpu_budget < 2 ? p->cpu_budget : 2; emax = 2; break;
+    case PERF_FAST:     pj = 3; tcpu = p->cpu_budget < 8 ? p->cpu_budget : 8; nice = 0;  reserve = 1024; br = 3; zstd = p->ncpu_online - 1; emax = 8; break;
+    case PERF_TURBO:    pj = 4; tcpu = p->cpu_budget < 12 ? p->cpu_budget : 12; nice = 0; reserve = 1024; br = 4; zstd = p->ncpu_online - 1; emax = 12; break;
+    case PERF_BALANCED:
+    case PERF_MANUAL:
+    default:            pj = 2; tcpu = p->cpu_budget < 4 ? p->cpu_budget : 4; nice = 5; reserve = 768; br = 2; zstd = p->ncpu_online < 4 ? p->ncpu_online : 4; emax = 4; break;
+    }
+    if (zstd < 1) zstd = 1;
+    if (cls == PERF_FAST || cls == PERF_TURBO) {
+        zstd = p->ncpu_online - 1;
+        if (zstd < 1) zstd = 1;
+        int cap = cls == PERF_FAST ? 6 : 8;
+        if (zstd > cap) zstd = cap;
+    }
+    int cpu_b = p->cpu_budget < tcpu ? p->cpu_budget : tcpu;
+    if (cpu_b < 1) cpu_b = 1;
+    p->cls = cls;
+    p->total_cpu_threads = tcpu;
+    p->nice_level = nice;
+    p->reserve_mb = reserve;
+    int n = ld->n_ext4 + ld->n_erofs + ld->n_f2fs;
+    if (n == 0) {
+        p->part_jobs = 1; p->erofs_workers = 1; p->brotli_jobs = 1; p->zstd_threads = zstd;
+    } else {
+        int storage_cap = p->storage == STORAGE_EMMC ? 2 : (p->storage == STORAGE_UFS ? 4 : 32);
+        int part = pj < n ? pj : n;
+        if (part > storage_cap) part = storage_cap;
+        int erofs;
+        if (n == 1 && ld->n_erofs == 1) { part = 1; erofs = cpu_b; }
+        else {
+            int half = cpu_b / 2; if (half < 1) half = 1;
+            if (part > half) part = half;
+            erofs = cpu_b / part; if (erofs < 1) erofs = 1;
+        }
+        if (erofs > emax) erofs = emax;
+        uint64_t total_mb = p->mem_total_kb / 1024, avail_mb = p->mem_avail_kb / 1024;
+        uint64_t cap_total = total_mb * 55 / 100;
+        uint64_t budget;
+        if (p->mem_avail_kb) {
+            if (avail_mb > (uint64_t)reserve) budget = avail_mb - (uint64_t)reserve; else budget = 0;
+            if (budget > cap_total) budget = cap_total;
+        } else budget = cap_total;
+        int per_job = 0;
+        if (ld->n_ext4) per_job = 384;
+        if (ld->n_f2fs && per_job < 384) per_job = 384;
+        if (ld->n_erofs) { int e = 96 * erofs; if (e > per_job) per_job = e; }
+        if (per_job < 1) per_job = 1;
+        int mb_erofs = (int)(budget / 96); if (mb_erofs < 1) mb_erofs = 1;
+        if (erofs > mb_erofs) erofs = mb_erofs;
+        int mb_jobs = (int)(budget / (uint64_t)per_job); if (mb_jobs < 1) mb_jobs = 1;
+        if (part > mb_jobs) part = mb_jobs;
+        if (ld->n_erofs == n && part > 1) {
+            int e = cpu_b / part; if (e < 1) e = 1;
+            if (erofs > e) erofs = e;
+        }
+        if (erofs < 1) erofs = 1;
+        if (part < 1) part = 1;
+        p->part_jobs = part;
+        p->erofs_workers = erofs;
+        int mb_buf = (int)(budget / 96); if (mb_buf < 1) mb_buf = 1;
+        int brb = br < n ? br : n;
+        if (brb > mb_buf) brb = mb_buf;
+        if (brb < 1) brb = 1;
+        p->brotli_jobs = brb;
+        p->zstd_threads = zstd;
+    }
+    if (ov->has_jobs) p->part_jobs = ov->jobs;
+    if (ov->has_erofs_workers) p->erofs_workers = ov->erofs_workers;
+    if (ov->has_brotli_jobs) p->brotli_jobs = ov->brotli_jobs;
+    if (ov->has_zstd_threads) p->zstd_threads = ov->zstd_threads;
+    if (ov->has_nice) p->nice_level = ov->nice_level;
+    if (ov->has_reserve) p->reserve_mb = ov->reserve_mb;
+    int maxn = n > 0 ? n : 1;
+    if (p->part_jobs > maxn) p->part_jobs = maxn;
+    if (p->part_jobs < 1) p->part_jobs = 1;
+    if (p->erofs_workers < 1) p->erofs_workers = 1;
+    if (p->brotli_jobs < 1) p->brotli_jobs = 1;
+    if (p->zstd_threads < 1) p->zstd_threads = 1;
+}
+
+
+static const char *profile_name(perf_class_t c);
+static const char *storage_name(storage_kind_t s);
+
 /* dna repack <dirs,...> --read 1|0 --auto 1|0 --format 0|1 --type 0|1|2 --br N --erofs N --mode lz4hc|lz4|lzma
  *            --compress 0|1 --delavb 0|1 --hal-fallback 0|1 --convert 0|1|2   (convert: 0 ext4, 1 erofs, 2 f2fs) */
 static int cmd_repack(int argc, char **argv) {
-    ropts_t o = { 1, 1, 0, 0, 0, 0, 0, 0, 0, "lz4hc" }; int conv = 0;
+    ropts_t o = { 1, 1, 0, 0, 0, 0, 0, 0, 0, "lz4hc", 0 }; int conv = 0;
     char *names[128]; int nn = 0;
+    perf_ovr_t ov; perf_ovr_from_env(&ov);
     for (int i = 0; i < argc; i++) {
         const char *a = argv[i]; int hasv = i + 1 < argc;
         if (!strcmp(a, "--read") && hasv) o.rw = atoi(argv[++i]);
@@ -2024,13 +2405,57 @@ static int cmd_repack(int argc, char **argv) {
         else if (!strcmp(a, "--delavb")) o.delavb = flag_val(argc, argv, &i);
         else if (!strcmp(a, "--hal-fallback")) o.hal_fallback = flag_val(argc, argv, &i);
         else if (!strcmp(a, "--convert") && hasv) conv = atoi(argv[++i]);
+        else if (!strcmp(a, "--profile") && hasv) {
+            const char *v = argv[++i];
+            if (!strcmp(v, "auto")) ov.has_profile = 0;
+            else if (!strcmp(v, "saver")) { ov.has_profile = 1; ov.profile = PERF_SAVER; }
+            else if (!strcmp(v, "balanced")) { ov.has_profile = 1; ov.profile = PERF_BALANCED; }
+            else if (!strcmp(v, "fast")) { ov.has_profile = 1; ov.profile = PERF_FAST; }
+            else if (!strcmp(v, "turbo")) { ov.has_profile = 1; ov.profile = PERF_TURBO; }
+            else { fprintf(stderr, "> Error: unknown profile '%s'\n", v); return 2; }
+        }
+        else if (!strcmp(a, "--jobs") && hasv) { int v = atoi(argv[++i]); if (v >= 1 && v <= 32) { ov.jobs = v; ov.has_jobs = 1; } }
+        else if (!strcmp(a, "--erofs-workers") && hasv) { int v = atoi(argv[++i]); if (v >= 1 && v <= 32) { ov.erofs_workers = v; ov.has_erofs_workers = 1; } }
+        else if (!strcmp(a, "--brotli-jobs") && hasv) { int v = atoi(argv[++i]); if (v >= 1 && v <= 32) { ov.brotli_jobs = v; ov.has_brotli_jobs = 1; } }
+        else if (!strcmp(a, "--nice") && hasv) { int v = atoi(argv[++i]); if (v >= -20 && v <= 19) { ov.nice_level = v; ov.has_nice = 1; } }
+        else if (!strcmp(a, "--mem-reserve-mb") && hasv) { int v = atoi(argv[++i]); if (v >= 0 && v <= 65536) { ov.reserve_mb = v; ov.has_reserve = 1; } }
+        else if (!strcmp(a, "--thermal-limit") && hasv) { int v = atoi(argv[++i]); if (v >= 20 && v <= 120) g_thermal_limit_hot = v; }
         else if (a[0] != '-') for (char *t = strtok(argv[i], ", \t\n"); t && nn < 128; t = strtok(NULL, ", \t\n")) names[nn++] = t;
     }
     const char *dro = getenv("DNA_DRO"), *pro = getenv("DNA_PRO");
     if (!dro || !*dro || !pro || !*pro) { fprintf(stderr, "> Error: project is not selected\n"); return 1; }
-    if (!nn) { fprintf(stderr, "usage: dna repack <dir[,dir]> [options]\n"); return 2; }
+    if (!nn) { fprintf(stderr, "usage: dna repack <dir[,dir]> [--read 0|1] [--auto 0|1] [--format 0|1] [--type 0|1|2] [--br N] [--erofs N] [--mode lz4hc|lz4|lzma] [--compress 0|1] [--delavb 0|1] [--hal-fallback 0|1] [--convert 0|1|2] [--profile auto|saver|balanced|fast|turbo] [--jobs N] [--erofs-workers N] [--brotli-jobs N] [--nice N] [--mem-reserve-mb N] [--thermal-limit C]\n"); return 2; }
     { char od[4400]; snprintf(od, sizeof od, "%s/out", pro);
       if (mkdir_p(od)) { fprintf(stderr, "> Error: cannot create %s\n", od); return 1; } }
+    perf_load_t ld = { 0, 0, 0, 0, o.out_kind };
+    for (int i = 0; i < nn; i++) {
+        char *n = names[i]; size_t l = strlen(n); while (l && n[l - 1] == '/') n[--l] = 0;
+        if (!strcmp(n, "config") || !*n) continue;
+        char tree[4400], hdr[4600]; snprintf(tree, sizeof tree, "%s/%s", dro, n); snprintf(hdr, sizeof hdr, "%s/header", tree);
+        struct stat sb; if (stat(tree, &sb) || !S_ISDIR(sb.st_mode)) continue;
+        if (!access(hdr, R_OK)) ld.n_boot++;
+        else if (conv == 1) ld.n_erofs++;
+        else if (conv == 2) ld.n_f2fs++;
+        else ld.n_ext4++;
+    }
+    perf_t perf; perf_detect(&perf);
+    perf_make_plan(&perf, &ld, &ov);
+    int tmax = perf.temp_battery_c;
+    if (perf.temp_skin_c > tmax) tmax = perf.temp_skin_c;
+    if (perf.temp_soc_c > tmax) tmax = perf.temp_soc_c;
+    printf("> Performance: %s (RAM %.1f/%.1f GiB, free %.1f GiB, %d cores, %s, ",
+           profile_name(perf.cls), (double)perf.mem_avail_kb / 1048576.0, (double)perf.mem_total_kb / 1048576.0,
+           (double)perf.free_pro_bytes / 1073741824.0, perf.ncpu_online, storage_name(perf.storage));
+    if (tmax) printf("%d°C)\n", tmax); else printf("n/a)\n");
+    printf("> Plan: %d jobs, erofs workers %d/job, nice %d, reserve %.1f GiB\n",
+           perf.part_jobs, perf.erofs_workers, perf.nice_level, (double)perf.reserve_mb / 1024.0);
+    if (ld.n_erofs > 0) {
+        perf_load_t seq = ld;
+        seq.n_erofs = 1;
+        perf_t one = perf;
+        perf_make_plan(&one, &seq, &ov);
+        o.erofs_workers = one.erofs_workers;
+    }
     g_repack_quiet = !g_debug;
     int fail = 0;
     for (int i = 0; i < nn; i++) {
@@ -2566,370 +2991,6 @@ static uint64_t meminfo_kb(const char *key) {
     return v;
 }
 
-
-typedef enum { PERF_SAVER = 0, PERF_BALANCED, PERF_FAST, PERF_TURBO, PERF_MANUAL } perf_class_t;
-typedef enum { STORAGE_UNKNOWN = 0, STORAGE_EMMC, STORAGE_UFS, STORAGE_NVME, STORAGE_OTHER } storage_kind_t;
-
-typedef struct {
-    uint64_t mem_total_kb, mem_avail_kb, swap_total_kb, swap_free_kb;
-    int ncpu_online, ncpu_conf, big_cores, little_cores, cpu_budget;
-    storage_kind_t storage;
-    int temp_battery_c, temp_skin_c, temp_soc_c;
-    int psi_mem_avg10, psi_cpu_avg10, psi_io_avg10;
-    uint64_t free_tmp_bytes, free_pro_bytes;
-    perf_class_t cls;
-    int part_jobs, total_cpu_threads, erofs_workers, brotli_jobs, zstd_threads, nice_level, reserve_mb;
-} perf_t;
-
-static uint64_t read_u64_path(const char *path) {
-    FILE *f = fopen(path, "r");
-    if (!f) return 0;
-    unsigned long long v = 0;
-    if (fscanf(f, "%llu", &v) != 1) v = 0;
-    fclose(f);
-    return v;
-}
-
-static int read_text_path(const char *path, char *out, size_t n) {
-    FILE *f = fopen(path, "r");
-    if (!f) return 0;
-    out[0] = 0;
-    if (!fgets(out, (int)n, f)) { fclose(f); return 0; }
-    fclose(f);
-    out[strcspn(out, "\r\n")] = 0;
-    return 1;
-}
-
-static int lower_has(const char *s, const char *needle) {
-    char a[128], b[128];
-    size_t i;
-    for (i = 0; s[i] && i + 1 < sizeof a; i++) a[i] = (char)tolower((unsigned char)s[i]);
-    a[i] = 0;
-    for (i = 0; needle[i] && i + 1 < sizeof b; i++) b[i] = (char)tolower((unsigned char)needle[i]);
-    b[i] = 0;
-    return strstr(a, b) != NULL;
-}
-
-static int norm_temp(long v) {
-    if (v > 1000) v /= 1000;
-    else if (v > 150) v /= 10;
-    if (v < -20 || v > 150) return 0;
-    return (int)v;
-}
-
-static int dir_has_prefix(const char *dir, const char *prefix) {
-    DIR *d = opendir(dir);
-    if (!d) return 0;
-    struct dirent *de;
-    int found = 0;
-    size_t pl = strlen(prefix);
-    while ((de = readdir(d))) {
-        if (!strncmp(de->d_name, prefix, pl)) { found = 1; break; }
-    }
-    closedir(d);
-    return found;
-}
-
-static int dir_has_substr(const char *dir, const char *needle) {
-    DIR *d = opendir(dir);
-    if (!d) return 0;
-    struct dirent *de;
-    int found = 0;
-    while ((de = readdir(d))) {
-        if (strstr(de->d_name, needle)) { found = 1; break; }
-    }
-    closedir(d);
-    return found;
-}
-
-static int storage_detect(void) {
-    char p[4096];
-    if (!access(syspath(p, sizeof p, "/sys/block/mmcblk0"), F_OK)) return STORAGE_EMMC;
-    if (!access(syspath(p, sizeof p, "/sys/block/nvme0n1"), F_OK)) return STORAGE_NVME;
-    int sda = !access(syspath(p, sizeof p, "/sys/block/sda"), F_OK);
-    char cls[4096], plat[4096];
-    syspath(cls, sizeof cls, "/sys/class");
-    syspath(plat, sizeof plat, "/sys/devices/platform");
-    if (sda && (dir_has_prefix(cls, "ufs") || dir_has_substr(plat, "ufs"))) return STORAGE_UFS;
-    if (!access(syspath(p, sizeof p, "/sys/block"), F_OK) && dir_has_prefix(syspath(p, sizeof p, "/sys/block"), "s")) return STORAGE_OTHER;
-    if (!access(syspath(p, sizeof p, "/sys/block/mmcblk"), F_OK)) return STORAGE_OTHER;
-    DIR *d = opendir(syspath(p, sizeof p, "/sys/block"));
-    if (!d) return STORAGE_UNKNOWN;
-    struct dirent *de;
-    int any = 0;
-    while ((de = readdir(d))) if (de->d_name[0] != '.') { any = 1; break; }
-    closedir(d);
-    return any ? STORAGE_OTHER : STORAGE_UNKNOWN;
-}
-
-static void thermal_scan(int *battery, int *skin, int *soc) {
-    char dir[4096], p[4096], type[128];
-    syspath(dir, sizeof dir, "/sys/class/thermal");
-    DIR *d = opendir(dir);
-    if (d) {
-        struct dirent *de;
-        while ((de = readdir(d))) {
-            if (strncmp(de->d_name, "thermal_zone", 12)) continue;
-            snprintf(p, sizeof p, "%s/%s/type", dir, de->d_name);
-            if (!read_text_path(p, type, sizeof type)) continue;
-            snprintf(p, sizeof p, "%s/%s/temp", dir, de->d_name);
-            int t = norm_temp((long)read_u64_path(p));
-            if (!t) continue;
-            if (lower_has(type, "battery") || lower_has(type, "bms")) { if (t > *battery) *battery = t; }
-            else if (lower_has(type, "skin") || lower_has(type, "quiet_therm") || lower_has(type, "xo_therm") || lower_has(type, "case")) { if (t > *skin) *skin = t; }
-            else if (lower_has(type, "cpu") || lower_has(type, "gpu") || lower_has(type, "soc") || lower_has(type, "cpuss") || lower_has(type, "mtktscpu")) { if (t > *soc) *soc = t; }
-        }
-        closedir(d);
-    }
-    if (!*battery) {
-        syspath(p, sizeof p, "/sys/class/power_supply/battery/temp");
-        int t = norm_temp((long)read_u64_path(p));
-        if (t) *battery = t;
-    }
-}
-
-static int psi_read(const char *rel) {
-    char p[4096], line[512];
-    FILE *f = fopen(syspath(p, sizeof p, rel), "r");
-    if (!f) return 0;
-    int v = 0;
-    while (fgets(line, sizeof line, f)) {
-        if (strncmp(line, "some", 4)) continue;
-        char *a = strstr(line, "avg10=");
-        if (a) { double d = strtod(a + 6, NULL); if (d > 0) v = (int)d; }
-        break;
-    }
-    fclose(f);
-    return v;
-}
-
-static uint64_t free_bytes_path(const char *path) {
-    struct statvfs sv;
-    if (!path || !*path || statvfs(path, &sv)) return 0;
-    return (uint64_t)sv.f_bavail * (uint64_t)sv.f_frsize;
-}
-
-static void perf_detect(perf_t *p) {
-    memset(p, 0, sizeof *p);
-    p->mem_total_kb = meminfo_kb("MemTotal");
-    p->mem_avail_kb = meminfo_kb("MemAvailable");
-    if (!p->mem_avail_kb) p->mem_avail_kb = meminfo_kb("MemFree") + meminfo_kb("Buffers") + meminfo_kb("Cached");
-    p->swap_total_kb = meminfo_kb("SwapTotal");
-    p->swap_free_kb = meminfo_kb("SwapFree");
-
-    long on = sysconf(_SC_NPROCESSORS_ONLN), conf = sysconf(_SC_NPROCESSORS_CONF);
-    p->ncpu_online = on > 0 ? (int)on : 1;
-    p->ncpu_conf = conf > 0 ? (int)conf : p->ncpu_online;
-    cpu_set_t set;
-    if (sched_getaffinity(0, sizeof set, &set) == 0) {
-        int n = CPU_COUNT(&set);
-        if (n > 0 && n < p->ncpu_online) p->ncpu_online = n;
-    }
-    uint64_t caps[256] = {0};
-    int have[256] = {0}, maxc = 0;
-    int limit = p->ncpu_conf > 256 ? 256 : p->ncpu_conf;
-    for (int i = 0; i < limit; i++) {
-        char path[4096];
-        snprintf(path, sizeof path, "%s/sys/devices/system/cpu/cpu%d/cpu_capacity", g_sysroot, i);
-        uint64_t v = read_u64_path(path);
-        if (!v) {
-            snprintf(path, sizeof path, "%s/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_max_freq", g_sysroot, i);
-            v = read_u64_path(path);
-        }
-        if (v) { caps[i] = v; have[i] = 1; if ((int)v > maxc) maxc = (int)v; }
-    }
-    if (!maxc) {
-        p->big_cores = p->ncpu_online;
-    } else {
-        for (int i = 0; i < limit; i++) if (have[i]) {
-            if ((int)caps[i] * 4 >= maxc * 3) p->big_cores++;
-            else p->little_cores++;
-        }
-    }
-    p->cpu_budget = p->big_cores + p->little_cores / 2;
-    if (p->cpu_budget > p->ncpu_online - 1) p->cpu_budget = p->ncpu_online - 1;
-    if (p->cpu_budget < 1) p->cpu_budget = 1;
-    if (p->cpu_budget > 12) p->cpu_budget = 12;
-
-    p->storage = (storage_kind_t)storage_detect();
-    thermal_scan(&p->temp_battery_c, &p->temp_skin_c, &p->temp_soc_c);
-    p->psi_mem_avg10 = psi_read("/proc/pressure/memory");
-    p->psi_cpu_avg10 = psi_read("/proc/pressure/cpu");
-    p->psi_io_avg10 = psi_read("/proc/pressure/io");
-
-    const char *tmp = getenv("DNA_TMP");
-    if (!tmp || !*tmp) tmp = getenv("TMPDIR");
-    if (!tmp || !*tmp) tmp = "/data/local/tmp";
-    p->free_tmp_bytes = free_bytes_path(tmp);
-    const char *pro = getenv("DNA_PRO");
-    if (pro && *pro) {
-        char out[4096];
-        snprintf(out, sizeof out, "%s/out", pro);
-        p->free_pro_bytes = free_bytes_path(out);
-    }
-}
-
-static void thermal_thresholds(const char *env, int dw, int dh, int dc, int *w, int *h, int *c) {
-    *w = dw; *h = dh; *c = dc;
-    const char *s = getenv(env);
-    if (!s || !*s) return;
-    int a, b, d;
-    char tail;
-    if (sscanf(s, "%d,%d,%d%c", &a, &b, &d, &tail) != 3) return;
-    if (!(a < b && b < d) || a < -50 || d > 200) return;
-    *w = a; *h = b; *c = d;
-}
-
-static int perf_thermal_level(const perf_t *p) {
-    int bw, bh, bc, sw, sh, sc, ow, oh, oc;
-    thermal_thresholds("DNA_THERMAL_BATTERY", 40, 43, 46, &bw, &bh, &bc);
-    thermal_thresholds("DNA_THERMAL_SKIN", 42, 45, 48, &sw, &sh, &sc);
-    thermal_thresholds("DNA_THERMAL_SOC", 80, 90, 98, &ow, &oh, &oc);
-    int lvl = 0;
-    int vals[3] = { p->temp_battery_c, p->temp_skin_c, p->temp_soc_c };
-    int th[3][3] = { { bw, bh, bc }, { sw, sh, sc }, { ow, oh, oc } };
-    for (int i = 0; i < 3; i++) {
-        if (!vals[i]) continue;
-        int x = 0;
-        if (vals[i] >= th[i][2]) x = 3;
-        else if (vals[i] >= th[i][1]) x = 2;
-        else if (vals[i] >= th[i][0]) x = 1;
-        if (x > lvl) lvl = x;
-    }
-    return lvl;
-}
-
-
-typedef struct { int n_ext4, n_erofs, n_f2fs, n_boot; int out_kind; } perf_load_t;
-typedef struct {
-    int has_profile; perf_class_t profile;
-    int jobs, erofs_workers, brotli_jobs, zstd_threads, nice_level, reserve_mb;
-    int has_jobs, has_erofs_workers, has_brotli_jobs, has_zstd_threads, has_nice, has_reserve;
-} perf_ovr_t;
-
-static int env_int(const char *name, int lo, int hi, int *out) {
-    const char *s = getenv(name);
-    if (!s || !*s) return 0;
-    char *e = NULL;
-    long v = strtol(s, &e, 10);
-    if (!e || *e || v < lo || v > hi) return 0;
-    *out = (int)v;
-    return 1;
-}
-
-static void perf_ovr_from_env(perf_ovr_t *o) {
-    memset(o, 0, sizeof *o);
-    const char *pf = getenv("DNA_PERF");
-    if (pf && *pf && strcmp(pf, "auto") && strcmp(pf, "AUTO")) {
-        if (!strcasecmp(pf, "saver")) { o->has_profile = 1; o->profile = PERF_SAVER; }
-        else if (!strcasecmp(pf, "balanced")) { o->has_profile = 1; o->profile = PERF_BALANCED; }
-        else if (!strcasecmp(pf, "fast")) { o->has_profile = 1; o->profile = PERF_FAST; }
-        else if (!strcasecmp(pf, "turbo")) { o->has_profile = 1; o->profile = PERF_TURBO; }
-    }
-    o->has_jobs = env_int("DNA_JOBS", 1, 32, &o->jobs);
-    o->has_erofs_workers = env_int("DNA_EROFS_WORKERS", 1, 32, &o->erofs_workers);
-    o->has_brotli_jobs = env_int("DNA_BROTLI_JOBS", 1, 32, &o->brotli_jobs);
-    o->has_zstd_threads = env_int("DNA_ZSTD_THREADS", 1, 32, &o->zstd_threads);
-    o->has_nice = env_int("DNA_NICE", -20, 19, &o->nice_level);
-    o->has_reserve = env_int("DNA_MEM_RESERVE_MB", 0, 65536, &o->reserve_mb);
-}
-
-static perf_class_t perf_select_class(const perf_t *p) {
-    int level = perf_thermal_level(p);
-    uint64_t mib = 1024ULL;
-    int avail_small = p->mem_avail_kb && p->mem_avail_kb < 512 * mib;
-    if (p->mem_total_kb < 3 * 1024 * mib || avail_small || p->ncpu_online <= 2 || level >= 2) return PERF_SAVER;
-    avail_small = p->mem_avail_kb && p->mem_avail_kb < 1536 * mib;
-    if (p->mem_total_kb < 6 * 1024 * mib || p->ncpu_online <= 4 || avail_small || level >= 1) return PERF_BALANCED;
-    avail_small = p->mem_avail_kb && p->mem_avail_kb < 2560 * mib;
-    if (p->mem_total_kb < 8 * 1024 * mib || p->ncpu_online < 8 || avail_small) return PERF_FAST;
-    if (p->mem_avail_kb >= 3 * 1024 * mib && level == 0) return PERF_TURBO;
-    return PERF_FAST;
-}
-
-static void perf_make_plan(perf_t *p, const perf_load_t *ld, const perf_ovr_t *ov) {
-    perf_class_t cls = ov->has_profile ? ov->profile : perf_select_class(p);
-    int pj, tcpu, nice, reserve, br, zstd, emax;
-    switch (cls) {
-    case PERF_SAVER:    pj = 1; tcpu = p->cpu_budget < 2 ? p->cpu_budget : 2; nice = 10; reserve = 768;  br = 1; zstd = p->cpu_budget < 2 ? p->cpu_budget : 2; emax = 2; break;
-    case PERF_FAST:     pj = 3; tcpu = p->cpu_budget < 8 ? p->cpu_budget : 8; nice = 0;  reserve = 1024; br = 3; zstd = p->ncpu_online - 1; emax = 8; break;
-    case PERF_TURBO:    pj = 4; tcpu = p->cpu_budget < 12 ? p->cpu_budget : 12; nice = 0; reserve = 1024; br = 4; zstd = p->ncpu_online - 1; emax = 12; break;
-    case PERF_BALANCED:
-    case PERF_MANUAL:
-    default:            pj = 2; tcpu = p->cpu_budget < 4 ? p->cpu_budget : 4; nice = 5; reserve = 768; br = 2; zstd = p->ncpu_online < 4 ? p->ncpu_online : 4; emax = 4; break;
-    }
-    if (zstd < 1) zstd = 1;
-    if (cls == PERF_FAST || cls == PERF_TURBO) {
-        zstd = p->ncpu_online - 1;
-        if (zstd < 1) zstd = 1;
-        int cap = cls == PERF_FAST ? 6 : 8;
-        if (zstd > cap) zstd = cap;
-    }
-    int cpu_b = p->cpu_budget < tcpu ? p->cpu_budget : tcpu;
-    if (cpu_b < 1) cpu_b = 1;
-    p->cls = cls;
-    p->total_cpu_threads = tcpu;
-    p->nice_level = nice;
-    p->reserve_mb = reserve;
-    int n = ld->n_ext4 + ld->n_erofs + ld->n_f2fs;
-    if (n == 0) {
-        p->part_jobs = 1; p->erofs_workers = 1; p->brotli_jobs = 1; p->zstd_threads = zstd;
-    } else {
-        int storage_cap = p->storage == STORAGE_EMMC ? 2 : (p->storage == STORAGE_UFS ? 4 : 32);
-        int part = pj < n ? pj : n;
-        if (part > storage_cap) part = storage_cap;
-        int erofs;
-        if (n == 1 && ld->n_erofs == 1) { part = 1; erofs = cpu_b; }
-        else {
-            int half = cpu_b / 2; if (half < 1) half = 1;
-            if (part > half) part = half;
-            erofs = cpu_b / part; if (erofs < 1) erofs = 1;
-        }
-        if (erofs > emax) erofs = emax;
-        uint64_t total_mb = p->mem_total_kb / 1024, avail_mb = p->mem_avail_kb / 1024;
-        uint64_t cap_total = total_mb * 55 / 100;
-        uint64_t budget;
-        if (p->mem_avail_kb) {
-            if (avail_mb > (uint64_t)reserve) budget = avail_mb - (uint64_t)reserve; else budget = 0;
-            if (budget > cap_total) budget = cap_total;
-        } else budget = cap_total;
-        int per_job = 0;
-        if (ld->n_ext4) per_job = 384;
-        if (ld->n_f2fs && per_job < 384) per_job = 384;
-        if (ld->n_erofs) { int e = 96 * erofs; if (e > per_job) per_job = e; }
-        if (per_job < 1) per_job = 1;
-        int mb_erofs = (int)(budget / 96); if (mb_erofs < 1) mb_erofs = 1;
-        if (erofs > mb_erofs) erofs = mb_erofs;
-        int mb_jobs = (int)(budget / (uint64_t)per_job); if (mb_jobs < 1) mb_jobs = 1;
-        if (part > mb_jobs) part = mb_jobs;
-        if (ld->n_erofs == n && part > 1) {
-            int e = cpu_b / part; if (e < 1) e = 1;
-            if (erofs > e) erofs = e;
-        }
-        if (erofs < 1) erofs = 1;
-        if (part < 1) part = 1;
-        p->part_jobs = part;
-        p->erofs_workers = erofs;
-        int mb_buf = (int)(budget / 96); if (mb_buf < 1) mb_buf = 1;
-        int brb = br < n ? br : n;
-        if (brb > mb_buf) brb = mb_buf;
-        if (brb < 1) brb = 1;
-        p->brotli_jobs = brb;
-        p->zstd_threads = zstd;
-    }
-    if (ov->has_jobs) p->part_jobs = ov->jobs;
-    if (ov->has_erofs_workers) p->erofs_workers = ov->erofs_workers;
-    if (ov->has_brotli_jobs) p->brotli_jobs = ov->brotli_jobs;
-    if (ov->has_zstd_threads) p->zstd_threads = ov->zstd_threads;
-    if (ov->has_nice) p->nice_level = ov->nice_level;
-    if (ov->has_reserve) p->reserve_mb = ov->reserve_mb;
-    int maxn = n > 0 ? n : 1;
-    if (p->part_jobs > maxn) p->part_jobs = maxn;
-    if (p->part_jobs < 1) p->part_jobs = 1;
-    if (p->erofs_workers < 1) p->erofs_workers = 1;
-    if (p->brotli_jobs < 1) p->brotli_jobs = 1;
-    if (p->zstd_threads < 1) p->zstd_threads = 1;
-}
 
 static int payload_workers(void) {
     const char *env = getenv("DNA_PAYLOAD_WORKERS");
