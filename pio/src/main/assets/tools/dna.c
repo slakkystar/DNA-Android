@@ -2397,6 +2397,63 @@ static void perf_make_plan(perf_t *p, const perf_load_t *ld, const perf_ovr_t *o
 }
 
 
+typedef enum { GATE_OK, GATE_WAIT, GATE_ABORT } gate_t;
+
+static int g_gate_mem_timeout = 300;
+static int g_gate_temp_timeout = 600;
+
+static gate_t perf_gate(perf_t *p, int active_tasks, const char **reason) {
+    uint64_t avail = meminfo_kb("MemAvailable");
+    if (!avail) avail = meminfo_kb("MemFree") + meminfo_kb("Buffers") + meminfo_kb("Cached");
+    p->mem_avail_kb = avail;
+    p->psi_mem_avg10 = psi_read("/proc/pressure/memory");
+    p->psi_cpu_avg10 = psi_read("/proc/pressure/cpu");
+    p->psi_io_avg10 = psi_read("/proc/pressure/io");
+    p->temp_battery_c = p->temp_skin_c = p->temp_soc_c = 0;
+    thermal_scan(&p->temp_battery_c, &p->temp_skin_c, &p->temp_soc_c);
+    if (p->mem_avail_kb && p->mem_avail_kb / 1024 < (uint64_t)p->reserve_mb) {
+        *reason = "low memory";
+        return GATE_WAIT;
+    }
+    if (p->psi_mem_avg10 > 12 && active_tasks > 0) {
+        *reason = "memory pressure";
+        return GATE_WAIT;
+    }
+    if (perf_thermal_level(p) >= 2) {
+        *reason = "device is hot";
+        return GATE_WAIT;
+    }
+    return GATE_OK;
+}
+
+static int perf_wait_gate(perf_t *p, int active_tasks) {
+    const char *last = NULL;
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    for (;;) {
+        const char *reason = "";
+        gate_t g = perf_gate(p, active_tasks, &reason);
+        if (g == GATE_OK) return 0;
+        if (!last || strcmp(last, reason)) {
+            printf("> Waiting: %s\n", reason);
+            fflush(stdout);
+            last = reason;
+        }
+        int hot = strstr(reason, "hot") != NULL;
+        int limit = hot ? g_gate_temp_timeout : g_gate_mem_timeout;
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        double elapsed = (double)(t1.tv_sec - t0.tv_sec) + (double)(t1.tv_nsec - t0.tv_nsec) / 1e9;
+        if (elapsed >= limit) {
+            if (active_tasks > 0) return 2;
+            if (hot) fprintf(stderr, "> Error: device is too hot to continue\n");
+            else fprintf(stderr, "> Error: not enough memory to start packing\n");
+            return 1;
+        }
+        struct timespec ts = { 1, 0 };
+        nanosleep(&ts, NULL);
+    }
+}
+
 static const char *profile_name(perf_class_t c);
 static const char *storage_name(storage_kind_t s);
 
@@ -2479,6 +2536,7 @@ static int cmd_repack(int argc, char **argv) {
         if (!strcmp(n, "config") || !*n) continue;
         char tree[4400], hdr[4600]; snprintf(tree, sizeof tree, "%s/%s", dro, n); snprintf(hdr, sizeof hdr, "%s/header", tree);
         struct stat sb; if (stat(tree, &sb) || !S_ISDIR(sb.st_mode)) { fprintf(stderr, "> Error: %s not found\n", tree); fail = 1; continue; }
+        if (perf_wait_gate(&perf, 0)) { fail = 1; break; }
         int is_boot = !access(hdr, R_OK);
         const char *fmt = is_boot ? "boot" : (conv == 1 ? "erofs" : (conv == 2 ? "f2fs" : "ext4"));
         printf("> Packing: %s <%s>\n", n, fmt); fflush(stdout);
