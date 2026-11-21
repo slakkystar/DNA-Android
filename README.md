@@ -91,6 +91,11 @@ not packaged in either mode. Without the flag the prebuilt binaries are used.
 
 `assets/tools/patch_vbmeta` is also staged from `assets/tools/patch_vbmeta.sh`
 by default; the shell source replaces the shc-compiled prebuilt inside the APK.
+It patches the AVB flags at offset 120 the same way
+`fastboot --disable-verity --disable-verification` does: bit 0 disables
+dm-verity, bit 1 disables verification, and other bits are preserved. It
+validates `AVB0`, supports raw, sparse and AVB-footer images, and uses the
+bundled busybox/`simg2img`/`img2simg` helpers instead of `magiskboot`.
 To keep the original prebuilt instead:
 
 ```bash
