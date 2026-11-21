@@ -14,7 +14,7 @@ for src in tests/dna/t_*.c; do
     [ -e "$src" ] || continue
     name=$(basename "$src" .c)
     bin="$build/$name"
-    if ! "$cc" -O1 -g -fsanitize=address,undefined -D_GNU_SOURCE \
+    if ! "$cc" -O1 -g -fsanitize=address,undefined -D_GNU_SOURCE -DDNA_TEST \
         -Wall -Wextra -Wno-unused-function -Wno-unused-parameter -Wno-unused-variable \
         -o "$bin" "$src"; then
         echo "FAIL: $name (compile)" >&2

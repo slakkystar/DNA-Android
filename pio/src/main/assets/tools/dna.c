@@ -2821,6 +2821,65 @@ static int lp_not_dynamic(const char *b) {
     return !strncmp(b, "vbmeta", 6);
 }
 
+#define LP_COPY_BUF (4u << 20)
+
+#ifdef DNA_TEST
+static int g_no_cfr = 0;
+#endif
+
+static int copy_range_fd(int in, int out, uint64_t off, uint64_t len) {
+    off_t out0 = lseek(out, 0, SEEK_CUR);
+    if (out0 < 0 || lseek(in, (off_t)off, SEEK_SET) < 0) return -1;
+    uint64_t done = 0;
+    int method = 0;
+#ifdef DNA_TEST
+    if (g_no_cfr) method = 1;
+#endif
+#ifndef SYS_copy_file_range
+    method = 1;
+#endif
+    uint8_t *tmp = NULL;
+    while (done < len) {
+        ssize_t r;
+        if (method == 0) {
+#ifdef SYS_copy_file_range
+            r = syscall(SYS_copy_file_range, in, NULL, out, NULL, (size_t)(len - done), 0);
+#else
+            r = -1;
+#endif
+            if (r < 0 && (errno == EINVAL || errno == ENOSYS || errno == EXDEV || errno == EOPNOTSUPP)) {
+                method = 1; lseek(in, (off_t)(off + done), SEEK_SET); lseek(out, out0 + (off_t)done, SEEK_SET); continue;
+            }
+        } else if (method == 1) {
+            off_t io = (off_t)(off + done);
+            r = sendfile(out, in, &io, (size_t)(len - done));
+            if (r < 0 && (errno == EINVAL || errno == ENOSYS || errno == EOPNOTSUPP)) {
+                method = 2; lseek(in, (off_t)(off + done), SEEK_SET); lseek(out, out0 + (off_t)done, SEEK_SET); continue;
+            }
+        } else {
+            if (!tmp) tmp = malloc(1 << 20);
+            if (!tmp) break;
+            size_t want = len - done > (1 << 20) ? (1 << 20) : (size_t)(len - done);
+            r = read(in, tmp, want);
+            if (r > 0) {
+                size_t wr = 0;
+                while (wr < (size_t)r) {
+                    ssize_t w = write(out, tmp + wr, (size_t)r - wr);
+                    if (w < 0) { if (errno == EINTR) continue; r = -1; break; }
+                    wr += (size_t)w;
+                }
+            }
+        }
+        if (r > 0) done += (uint64_t)r;
+        else if (r < 0 && errno == EINTR) continue;
+        else if (r < 0 && method < 2) {
+            method++; lseek(in, (off_t)(off + done), SEEK_SET); lseek(out, out0 + (off_t)done, SEEK_SET);
+        } else break;
+    }
+    free(tmp);
+    return done == len ? 0 : -1;
+}
+
 static int cmd_lpmake(int argc, char **argv) {
     const char *type = "VAB", *group = "qti_dynamic_partitions"; int sparse = 0; double sz_in = 8.5;
     lpi_t *im = calloc(256, sizeof *im); int nim = 0;
@@ -2932,18 +2991,26 @@ static int cmd_lpmake(int argc, char **argv) {
     sk_zero(&k, 4096);
     sk_raw(&k, md + 4096, reserved - 4096);
     uint64_t cur = reserved;
-    uint8_t *buf = malloc(1 << 20);
+    uint8_t *buf = malloc(LP_COPY_BUF);
     for (int i = 0; i < np && !k.err; i++) {
         if (!pp[i].size) continue;
         sk_gap(&k, pp[i].start - cur);
         printf("> Adding: %s (%llu KiB)\n", pp[i].name, (unsigned long long)(pp[i].size >> 10)); fflush(stdout);
         img_t pi; if (img_open(&pi, pp[i].path)) { k.err = 1; break; }
-        for (uint64_t off = 0; off < pp[i].size && !k.err; off += 1 << 20) {
-            uint64_t n = pp[i].size - off; if (n > (1 << 20)) n = 1 << 20;
-            memset(buf, 0, n);
+        if (pi.f) posix_fadvise(fileno(pi.f), 0, 0, POSIX_FADV_SEQUENTIAL);
+        for (uint64_t off = 0; off < pp[i].size && !k.err; off += LP_COPY_BUF) {
+            uint64_t n = pp[i].size - off; if (n > LP_COPY_BUF) n = LP_COPY_BUF;
             uint64_t have = off < pi.size ? pi.size - off : 0; if (have > n) have = n;
-            if (have && !img_read(&pi, off, buf, have)) { k.err = 1; break; }
-            sk_data(&k, buf, n);
+            if (!pi.sparse && !k.sparse && have) {
+                sk_close(&k);
+                if (copy_range_fd(fileno(pi.f), fileno(k.o), off, have)) { k.err = 1; break; }
+                k.blocks += have / 4096;
+                if (have < n) { memset(buf, 0, (size_t)(n - have)); sk_data(&k, buf, n - have); }
+            } else {
+                if (have && !img_read(&pi, off, buf, have)) { k.err = 1; break; }
+                if (have < n) memset(buf + have, 0, (size_t)(n - have));
+                sk_data(&k, buf, n);
+            }
         }
         img_close(&pi);
         cur = pp[i].start + pp[i].size;
