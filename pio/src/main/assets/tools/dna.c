@@ -1122,6 +1122,91 @@ static int repack_ext4(const char *name, const char *dro, const char *pro, const
     return 0;
 }
 
+typedef struct {
+    FILE *out;
+    char **known;
+    size_t nknown;
+    const char *tree;
+    const char *name;
+} fsc_ctx_t;
+
+static int fsc_cmp(const void *a, const void *b) {
+    return strcmp(*(char *const *)a, *(char *const *)b);
+}
+
+static int fsc_known(fsc_ctx_t *c, const char *path) {
+    return c->nknown && bsearch(&path, c->known, c->nknown, sizeof *c->known, fsc_cmp);
+}
+
+static void fsc_add(fsc_ctx_t *c, const char *rel, const struct stat *st) {
+    char key[8192];
+    snprintf(key, sizeof key, "%s/%s", c->name, rel);
+    if (fsc_known(c, key)) return;
+    unsigned mode = st->st_mode & 07777;
+    if (S_ISLNK(st->st_mode)) mode = 0644;
+    else if (!mode) mode = S_ISDIR(st->st_mode) ? 0755 : 0644;
+    unsigned uid = st->st_uid < 10000 ? (unsigned)st->st_uid : 0;
+    unsigned gid = st->st_gid < 10000 ? (unsigned)st->st_gid : 0;
+    fprintf(c->out, "%s %u %u %04o\n", key, uid, gid, mode);
+}
+
+static void fsc_walk(fsc_ctx_t *c, const char *rel, int depth) {
+    if (depth > 64) return;
+    char dir[8192];
+    snprintf(dir, sizeof dir, "%s/%s", c->tree, rel);
+    DIR *d = opendir(dir);
+    if (!d) return;
+    struct dirent *de;
+    while ((de = readdir(d))) {
+        if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
+        char child[8192], full[8192];
+        snprintf(child, sizeof child, "%s%s%s", rel, *rel ? "/" : "", de->d_name);
+        snprintf(full, sizeof full, "%s/%s", c->tree, child);
+        struct stat st;
+        if (lstat(full, &st)) continue;
+        fsc_add(c, child, &st);
+        if (S_ISDIR(st.st_mode)) fsc_walk(c, child, depth + 1);
+    }
+    closedir(d);
+}
+
+static void fs_config_complete(const char *tree, const char *name, const char *fsc) {
+    FILE *f = fopen(fsc, "r");
+    if (!f) return;
+    char **known = NULL;
+    size_t n = 0, cap = 0;
+    char line[8192];
+    while (fgets(line, sizeof line, f)) {
+        char *p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        char *e = p;
+        while (*e && *e != ' ' && *e != '\t' && *e != '\r' && *e != '\n') e++;
+        if (e == p) continue;
+        *e = 0;
+        if (n == cap) {
+            size_t nc = cap ? cap * 2 : 1024;
+            char **np = realloc(known, nc * sizeof *np);
+            if (!np) break;
+            known = np; cap = nc;
+        }
+        known[n] = strdup(p);
+        if (!known[n]) break;
+        n++;
+    }
+    fclose(f);
+    if (n > 1) qsort(known, n, sizeof *known, fsc_cmp);
+    f = fopen(fsc, "a");
+    if (f) {
+        fsc_ctx_t c = { f, known, n, tree, name };
+        struct stat st;
+        if (!stat(tree, &st)) fsc_add(&c, "", &st);
+        fsc_walk(&c, "", 0);
+        fclose(f);
+    }
+    for (size_t i = 0; i < n; i++) free(known[i]);
+    free(known);
+}
+
 static int repack_erofs(const char *name, const char *dro, const char *pro, const ropts_t *o) {
     char tree[4400], fsc[4600], fcx[4600], fso[4600], final[4600], raw[4700], mp[300], comp[64], uuid[64] = "", ub[80], fcb[4700], fsb[4700];
     snprintf(tree, sizeof tree, "%s/%s", dro, name);
@@ -1141,6 +1226,7 @@ static int repack_erofs(const char *name, const char *dro, const char *pro, cons
     snprintf(fsb, sizeof fsb, "--fs-config-file=%s", fsc); if (!access(fsc, R_OK)) a[k++] = fsb;
     snprintf(fcb, sizeof fcb, "--file-contexts=%s", fcx); if (!access(fcx, R_OK)) a[k++] = fcb;
     a[k++] = raw; a[k++] = tree; a[k] = NULL;
+    if (!access(fsc, R_OK)) fs_config_complete(tree, name, fsc);
     printf("> Building erofs (%s): %s\n", comp, name); fflush(stdout);
     remove(raw);
     if (run_quiet(a)) { fprintf(stderr, "> Error: mkfs.erofs failed\n"); remove(raw); return 1; }
