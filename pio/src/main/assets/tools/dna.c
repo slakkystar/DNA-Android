@@ -18,6 +18,9 @@
 #include <sys/wait.h>
 #include <poll.h>
 #include <signal.h>
+#ifdef DNA_HAVE_XZ
+#include "xz.h"
+#endif
 
 #define VERSION "1.0"
 
@@ -1713,111 +1716,291 @@ static int pay_load(pay_t *py, const char *path) {
     return 0;
 }
 
-typedef struct {
-    FILE *o; const pext_t *e; uint32_t n, i;
-    uint64_t pos, bs;
-} extw_t;
-
 static uint64_t ext_bytes(const pext_t *e, uint32_t n, uint64_t bs) {
     uint64_t total = 0;
     for (uint32_t i = 0; i < n; i++) total += e[i].blocks * bs;
     return total;
 }
 
-static int extw_put(extw_t *w, const uint8_t *buf, size_t n) {
+static uint64_t meminfo_kb(const char *key) {
+    FILE *f = fopen("/proc/meminfo", "r");
+    if (!f) return 0;
+    char line[256];
+    size_t kl = strlen(key);
+    uint64_t v = 0;
+    while (fgets(line, sizeof line, f)) {
+        if (!strncmp(line, key, kl)) {
+            const char *p = line + kl;
+            while (*p == ':' || *p == ' ' || *p == '\t') p++;
+            v = strtoull(p, NULL, 10);
+            break;
+        }
+    }
+    fclose(f);
+    return v;
+}
+
+static int payload_workers(void) {
+    const char *env = getenv("DNA_PAYLOAD_WORKERS");
+    if (env && *env) {
+        int n = atoi(env);
+        if (n < 1) n = 1;
+        if (n > 8) n = 8;
+        return n;
+    }
+    uint64_t total = meminfo_kb("MemTotal");
+    uint64_t avail = meminfo_kb("MemAvailable");
+    long ncpu = sysconf(_SC_NPROCESSORS_ONLN);
+    int n;
+    if (total >= 5632ULL * 1024) n = 8;
+    else if (total >= 3072ULL * 1024) n = 4;
+    else n = 2;
+    if (total && total < 2048ULL * 1024) n = 1;
+    if (avail && avail < 256ULL * 1024) n = 1;
+    if (ncpu > 0 && n > ncpu) n = (int)ncpu;
+    if (n < 1) n = 1;
+    return n;
+}
+
+static int grow_buf(uint8_t **buf, size_t *cap, size_t need) {
+    if (*cap >= need) return 0;
+    size_t nc = *cap ? *cap : 1;
+    while (nc < need) nc *= 2;
+    uint8_t *n = realloc(*buf, nc);
+    if (!n) return -1;
+    *buf = n; *cap = nc;
+    return 0;
+}
+
+typedef struct {
+    int fd;
+    const pext_t *e;
+    uint32_t n, i;
+    uint64_t pos, bs;
+} extw_fd_t;
+
+static int extw_fd_put(extw_fd_t *w, const uint8_t *buf, size_t n) {
     while (n) {
         if (w->i >= w->n) return -1;
         uint64_t cap = w->e[w->i].blocks * w->bs;
         if (w->pos >= cap) { w->i++; w->pos = 0; continue; }
         uint64_t left = cap - w->pos;
         size_t k = n < left ? n : (size_t)left;
-        if (fseeko(w->o, (off_t)(w->e[w->i].start * w->bs + w->pos), SEEK_SET)) return -1;
-        if (fwrite(buf, 1, k, w->o) != k) return -1;
+        uint64_t off = w->e[w->i].start * w->bs + w->pos;
+        size_t done = 0;
+        while (done < k) {
+            ssize_t wr = pwrite(w->fd, buf + done, k - done, (off_t)(off + done));
+            if (wr < 0) { if (errno == EINTR) continue; return -1; }
+            if (wr == 0) return -1;
+            done += (size_t)wr;
+        }
         w->pos += k; buf += k; n -= k;
     }
     return 0;
 }
 
-static int extw_done(extw_t *w) {
+static int extw_fd_done(extw_fd_t *w) {
     while (w->i < w->n && w->pos >= w->e[w->i].blocks * w->bs) { w->i++; w->pos = 0; }
     return w->i >= w->n;
 }
 
-/* Decompress one install operation's data while feeding it directly into dst extents. */
-static int pay_decompress(pay_t *py, pop_t *op, extw_t *w) {
+static int read_payload_at(int fd, void *buf, size_t len, uint64_t off) {
+    size_t done = 0;
+    while (done < len) {
+        ssize_t n = pread(fd, (uint8_t *)buf + done, len - done, (off_t)(off + done));
+        if (n < 0) { if (errno == EINTR) continue; return -1; }
+        if (n == 0) return -1;
+        done += (size_t)n;
+    }
+    return 0;
+}
+
+static int decompress_external(const char *prog, char *const argv[],
+                               const uint8_t *in, size_t in_len,
+                               uint8_t *out, size_t out_cap, size_t *out_len) {
     int p2c[2], c2p[2];
     if (pipe(p2c) || pipe(c2p)) return -1;
     pid_t pid = fork();
-    if (pid < 0) { close(p2c[0]); close(p2c[1]); close(c2p[0]); close(c2p[1]); return -1; }
+    if (pid < 0) {
+        close(p2c[0]); close(p2c[1]); close(c2p[0]); close(c2p[1]);
+        return -1;
+    }
     if (pid == 0) {
         dup2(p2c[0], 0); dup2(c2p[1], 1);
         close(p2c[0]); close(p2c[1]); close(c2p[0]); close(c2p[1]);
-        if (op->type == 11) execlp("brotli", "brotli", "-d", "-c", NULL);
-        else if (op->type == 15) execlp("zstd", "zstd", "-d", "-c", NULL);
-        else if (op->type == 1) execlp("busybox", "busybox", "bzip2", "-dc", NULL);
-        else execlp("busybox", "busybox", "xz", "-dc", NULL);
+        execvp(prog, argv);
         _exit(127);
     }
-
     close(p2c[0]); close(c2p[1]);
-    int src = open(py->path, O_RDONLY);
-    uint8_t *cbuf = malloc(1 << 16), *obuf = malloc(1 << 20);
-    uint64_t sent = 0;
-    int in_open = 1, out_open = 1, bad = src < 0 || !cbuf || !obuf;
+    int fl = fcntl(p2c[1], F_GETFL, 0);
+    if (fl >= 0) fcntl(p2c[1], F_SETFL, fl | O_NONBLOCK);
+    fl = fcntl(c2p[0], F_GETFL, 0);
+    if (fl >= 0) fcntl(c2p[0], F_SETFL, fl | O_NONBLOCK);
+
+    size_t in_pos = 0, out_pos = 0;
+    int in_open = 1, out_open = 1, bad = 0, overflow = 0;
+    uint8_t sink[4096];
     while (!bad && (in_open || out_open)) {
         struct pollfd pf[2];
-        pf[0].fd = in_open ? p2c[1] : -1; pf[0].events = POLLOUT; pf[0].revents = 0;
-        pf[1].fd = out_open ? c2p[0] : -1; pf[1].events = POLLIN; pf[1].revents = 0;
-        if (poll(pf, 2, -1) < 0) { if (errno == EINTR) continue; bad = 1; break; }
+        pf[0].fd = in_open ? p2c[1] : -1;
+        pf[0].events = POLLOUT; pf[0].revents = 0;
+        pf[1].fd = out_open ? c2p[0] : -1;
+        pf[1].events = POLLIN; pf[1].revents = 0;
+        int pr = poll(pf, 2, -1);
+        if (pr < 0) { if (errno == EINTR) continue; bad = 1; break; }
         if (pf[1].fd >= 0 && (pf[1].revents & (POLLIN | POLLHUP | POLLERR))) {
-            ssize_t n = read(c2p[0], obuf, 1 << 20);
-            if (n > 0) { if (extw_put(w, obuf, (size_t)n)) bad = 1; }
-            else if (n == 0) out_open = 0;
-            else if (errno != EINTR && errno != EAGAIN) out_open = 0;
-        }
-        if (!bad && pf[0].fd >= 0 && (pf[0].revents & (POLLOUT | POLLERR | POLLHUP))) {
-            if (sent >= op->data_len) {
-                close(p2c[1]); in_open = 0;
-            } else {
-                size_t k = op->data_len - sent > (1 << 16) ? (1 << 16) : (size_t)(op->data_len - sent);
-                ssize_t got = pread(src, cbuf, k, (off_t)(py->data_start + op->data_off + sent));
-                if (got <= 0) { bad = 1; break; }
-                size_t off = 0;
-                while (off < (size_t)got) {
-                    ssize_t wr = write(p2c[1], cbuf + off, (size_t)got - off);
-                    if (wr <= 0) { bad = 1; break; }
-                    off += (size_t)wr; sent += (uint64_t)wr;
-                }
-                if (!bad && sent >= op->data_len) { close(p2c[1]); in_open = 0; }
+            uint8_t *dst = out_pos < out_cap ? out + out_pos : sink;
+            size_t room = out_pos < out_cap ? out_cap - out_pos : sizeof sink;
+            ssize_t n = read(c2p[0], dst, room);
+            if (n > 0) {
+                if (out_pos < out_cap) out_pos += (size_t)n;
+                else overflow = 1;
+            } else if (n == 0) {
+                out_open = 0;
+            } else if (errno != EINTR && errno != EAGAIN) {
+                out_open = 0;
             }
         }
-        if ((pf[0].revents & POLLERR) || (pf[1].revents & POLLERR)) bad = 1;
+        if (!bad && pf[0].fd >= 0 && (pf[0].revents & (POLLOUT | POLLERR | POLLHUP))) {
+            if (in_pos >= in_len) {
+                close(p2c[1]); in_open = 0;
+            } else {
+                size_t k = in_len - in_pos;
+                if (k > (1u << 20)) k = 1u << 20;
+                ssize_t n = write(p2c[1], in + in_pos, k);
+                if (n > 0) in_pos += (size_t)n;
+                else if (n < 0 && errno != EINTR && errno != EAGAIN) bad = 1;
+                if (!bad && in_pos >= in_len) { close(p2c[1]); in_open = 0; }
+            }
+        }
+        if (pf[0].revents & POLLERR) {
+            if (in_pos < in_len) bad = 1;
+            if (in_open) { close(p2c[1]); in_open = 0; }
+        }
+        if (pf[1].revents & POLLERR) out_open = 0;
     }
     if (in_open) close(p2c[1]);
     if (out_open) close(c2p[0]);
-    if (src >= 0) close(src);
-    if (bad) { kill(pid, SIGKILL); waitpid(pid, NULL, 0); free(cbuf); free(obuf); return -1; }
-    int st = 0; waitpid(pid, &st, 0);
-    int ok = WIFEXITED(st) && WEXITSTATUS(st) == 0 && extw_done(w);
-    free(cbuf); free(obuf);
-    return ok ? 0 : -1;
+    if (bad) { kill(pid, SIGKILL); waitpid(pid, NULL, 0); return -1; }
+    int st = 0;
+    if (waitpid(pid, &st, 0) < 0) return -1;
+    if (!WIFEXITED(st) || WEXITSTATUS(st) != 0 || overflow) return -1;
+    *out_len = out_pos;
+    return 0;
 }
 
-static int pay_zero(extw_t *w) {
-    uint8_t *z = calloc(1, 1 << 20);
-    if (!z) return -1;
-    uint64_t total = ext_bytes(w->e, w->n, w->bs), done = 0;
-    int rc = 0;
-    while (done < total) {
-        size_t k = total - done > (1 << 20) ? (1 << 20) : (size_t)(total - done);
-        if (extw_put(w, z, k)) { rc = -1; break; }
-        done += k;
+typedef struct {
+    int pfd;
+    uint8_t *inbuf; size_t incap;
+    uint8_t *outbuf; size_t outcap;
+    uint8_t *zbuf; size_t zcap;
+#ifdef DNA_HAVE_XZ
+    struct xz_dec *dec;
+#endif
+} worker_ctx_t;
+
+static int process_op_fast(pay_t *py, pop_t *op, extw_fd_t *w, worker_ctx_t *c) {
+    uint64_t out_bytes = ext_bytes(op->ext, op->next, py->block_size);
+    if (out_bytes > SIZE_MAX) return -1;
+    size_t out_len = (size_t)out_bytes;
+
+    if (op->type == 6 || op->type == 7) {
+        size_t need = out_len > (1u << 20) ? (1u << 20) : (out_len ? out_len : 1);
+        if (grow_buf(&c->zbuf, &c->zcap, need)) return -1;
+        memset(c->zbuf, 0, need);
+        uint64_t done = 0;
+        while (done < out_bytes) {
+            size_t k = out_bytes - done > (1u << 20) ? (1u << 20) : (size_t)(out_bytes - done);
+            if (extw_fd_put(w, c->zbuf, k)) return -1;
+            done += k;
+        }
+        return 0;
     }
-    free(z);
+
+    if (op->data_off > py->file_size - py->data_start ||
+        op->data_len > py->file_size - py->data_start - op->data_off) return -1;
+    if (op->data_len > SIZE_MAX) return -1;
+    size_t in_len = (size_t)op->data_len;
+
+    if (op->type == 0) {
+        size_t need = in_len > (1u << 20) ? (1u << 20) : (in_len ? in_len : 1);
+        if (grow_buf(&c->inbuf, &c->incap, need)) return -1;
+        uint64_t done = 0;
+        while (done < op->data_len) {
+            size_t k = op->data_len - done > (1u << 20) ? (1u << 20) : (size_t)(op->data_len - done);
+            if (read_payload_at(c->pfd, c->inbuf, k, py->data_start + op->data_off + done)) return -1;
+            if (extw_fd_put(w, c->inbuf, k)) return -1;
+            done += k;
+        }
+        return 0;
+    }
+
+    if (grow_buf(&c->inbuf, &c->incap, in_len ? in_len : 1)) return -1;
+    if (grow_buf(&c->outbuf, &c->outcap, out_len ? out_len : 1)) return -1;
+    if (in_len && read_payload_at(c->pfd, c->inbuf, in_len, py->data_start + op->data_off)) return -1;
+
+    int decoded = 0;
+#ifdef DNA_HAVE_XZ
+    if (op->type == 8) {
+        struct xz_buf b = { c->inbuf, 0, in_len, c->outbuf, 0, out_len ? out_len : 1 };
+        enum xz_ret ret = xz_dec_run(c->dec, &b);
+        if (ret == XZ_STREAM_END && b.out_pos == out_len) decoded = 1;
+    }
+#endif
+    if (!decoded) {
+        const char *prog;
+        char *argv[5];
+        if (op->type == 8) {
+            prog = "busybox";
+            argv[0] = (char *)"busybox"; argv[1] = (char *)"xz"; argv[2] = (char *)"-dc"; argv[3] = NULL;
+        } else if (op->type == 1) {
+            prog = "busybox";
+            argv[0] = (char *)"busybox"; argv[1] = (char *)"bzip2"; argv[2] = (char *)"-dc"; argv[3] = NULL;
+        } else if (op->type == 11) {
+            prog = "brotli";
+            argv[0] = (char *)"brotli"; argv[1] = (char *)"-d"; argv[2] = (char *)"-c"; argv[3] = NULL;
+        } else if (op->type == 15) {
+            prog = "zstd";
+            argv[0] = (char *)"zstd"; argv[1] = (char *)"-d"; argv[2] = (char *)"-c"; argv[3] = NULL;
+        } else {
+            return -1;
+        }
+        size_t got = 0;
+        if (decompress_external(prog, argv, c->inbuf, in_len, c->outbuf, out_len, &got)) return -1;
+        if (got != out_len) return -1;
+    }
+    if (out_len && extw_fd_put(w, c->outbuf, out_len)) return -1;
+    return 0;
+}
+
+static int worker_run(pay_t *py, ppart_t *p, int pfd, int ofd, int id, int nworkers) {
+    worker_ctx_t c;
+    memset(&c, 0, sizeof c);
+    c.pfd = pfd;
+#ifdef DNA_HAVE_XZ
+    c.dec = xz_dec_init(XZ_SINGLE, 0);
+    if (!c.dec) return -1;
+#endif
+    int rc = 0;
+    for (uint32_t i = (uint32_t)id; i < p->nops && !rc; i += (uint32_t)nworkers) {
+        extw_fd_t w = { ofd, p->ops[i].ext, p->ops[i].next, 0, 0, py->block_size };
+        rc = process_op_fast(py, &p->ops[i], &w, &c);
+        if (!rc && !extw_fd_done(&w)) rc = -1;
+    }
+    free(c.inbuf); free(c.outbuf); free(c.zbuf);
+#ifdef DNA_HAVE_XZ
+    xz_dec_end(c.dec);
+#endif
     return rc;
 }
 
 static int dumper_one(pay_t *py, ppart_t *p, int auto_unpack, int *auto_fail) {
+#ifdef DNA_HAVE_XZ
+    xz_crc32_init();
+#ifdef XZ_USE_CRC64
+    xz_crc64_init();
+#endif
+#endif
     char out[4700];
     char d[4400]; snprintf(d, sizeof d, "%s", py->path);
     char *sl = strrchr(d, '/');
@@ -1833,8 +2016,8 @@ static int dumper_one(pay_t *py, ppart_t *p, int auto_unpack, int *auto_fail) {
     }
 
     printf("> Extracting: %s\n", p->name); fflush(stdout);
-    FILE *o = fopen(out, "wb");
-    if (!o) { fprintf(stderr, "> Error: cannot write %s\n", out); return 1; }
+    int ofd = open(out, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (ofd < 0) { fprintf(stderr, "> Error: cannot write %s\n", out); return 1; }
     uint64_t max_end = 0;
     for (uint32_t i = 0; i < p->nops; i++) {
         pop_t *op = &p->ops[i];
@@ -1843,39 +2026,53 @@ static int dumper_one(pay_t *py, ppart_t *p, int auto_unpack, int *auto_fail) {
             if (e > max_end) max_end = e;
         }
     }
+    if (ftruncate(ofd, (off_t)max_end)) {
+        close(ofd); remove(out);
+        fprintf(stderr, "> Error: cannot size %s\n", out);
+        return 1;
+    }
+
+    int pfd = open(py->path, O_RDONLY);
+    if (pfd < 0) {
+        close(ofd); remove(out);
+        fprintf(stderr, "> Error: cannot read %s\n", py->path);
+        return 1;
+    }
+
+    int jobs = payload_workers();
+    if (jobs > (int)p->nops) jobs = (int)p->nops;
+    if (jobs < 1) jobs = 1;
 
     int rc = 0;
-    for (uint32_t i = 0; i < p->nops && !rc; i++) {
-        pop_t *op = &p->ops[i];
-        extw_t w = { o, op->ext, op->next, 0, 0, py->block_size };
-        if (op->type == 6 || op->type == 7) {
-            rc = pay_zero(&w);
-            continue;
-        }
-        if (op->data_off > py->file_size - py->data_start ||
-            op->data_len > py->file_size - py->data_start - op->data_off) {
-            fprintf(stderr, "> Error: %s data is outside payload.bin\n", p->name); rc = 1; break;
-        }
-        if (op->type == 0) {
-            uint64_t left = op->data_len;
-            FILE *src = fopen(py->path, "rb");
-            uint8_t *buf = malloc(1 << 20);
-            if (!src || !buf) { free(buf); if (src) fclose(src); rc = 1; break; }
-            if (fseeko(src, (off_t)(py->data_start + op->data_off), SEEK_SET)) rc = 1;
-            while (!rc && left) {
-                size_t k = left > (1 << 20) ? (1 << 20) : (size_t)left;
-                size_t got = fread(buf, 1, k, src);
-                if (got != k || extw_put(&w, buf, k)) rc = 1;
-                left -= k;
+    if (jobs == 1) {
+        rc = worker_run(py, p, pfd, ofd, 0, 1);
+    } else {
+        pid_t pids[8];
+        int npids = 0, fork_fail = 0;
+        for (int id = 1; id < jobs; id++) {
+            pid_t pid = fork();
+            if (pid < 0) { fork_fail = 1; break; }
+            if (pid == 0) {
+                int cr = worker_run(py, p, pfd, ofd, id, jobs);
+                _exit(cr ? 1 : 0);
             }
-            free(buf); fclose(src);
-            if (!rc && !extw_done(&w)) rc = 1;
+            pids[npids++] = pid;
+        }
+        if (fork_fail) {
+            for (int i = 0; i < npids; i++) kill(pids[i], SIGKILL);
+            for (int i = 0; i < npids; i++) waitpid(pids[i], NULL, 0);
+            rc = worker_run(py, p, pfd, ofd, 0, 1);
         } else {
-            rc = pay_decompress(py, op, &w);
+            if (worker_run(py, p, pfd, ofd, 0, jobs)) rc = 1;
+            if (rc) for (int i = 0; i < npids; i++) kill(pids[i], SIGKILL);
+            for (int i = 0; i < npids; i++) {
+                int st = 0;
+                if (waitpid(pids[i], &st, 0) < 0 || !WIFEXITED(st) || WEXITSTATUS(st) != 0) rc = 1;
+            }
         }
     }
-    if (!rc && ftruncate(fileno(o), (off_t)max_end)) rc = 1;
-    if (fclose(o)) rc = 1;
+    close(pfd);
+    if (close(ofd)) rc = 1;
     if (rc) { fprintf(stderr, "> Error: failed to extract %s\n", p->name); remove(out); return 1; }
     printf("> Done: %s\n", out);
     if (auto_unpack) {
@@ -1907,6 +2104,13 @@ static int cmd_dumper(int argc, char **argv) {
     if (list) {
         for (uint32_t i = 0; i < py.nparts; i++) puts(py.parts[i].name);
         pay_free(&py); return 0;
+    }
+    {
+        int jobs = payload_workers();
+        printf("> Payload mode: %s (%d worker%s)\n",
+               jobs >= 6 ? "fast" : (jobs >= 3 ? "balanced" : "saver"),
+               jobs, jobs == 1 ? "" : "s");
+        fflush(stdout);
     }
 
     int want = parts && *parts, found = 0, fail = 0, auto_fail = 0;

@@ -71,6 +71,13 @@ changed inside the staged build assets. An Android NDK is required for this mode
 Alternatively pass `-PdnaCc=/path/to/aarch64-linux-android-clang` or put such a
 compiler on `PATH` (for example, a Termux Android clang wrapper).
 
+Source builds also include xz-embedded (0BSD) and decode `REPLACE_XZ` payload
+operations in-process. Payload extraction uses a worker pool sized from RAM:
+8 workers at 5.5 GiB+ `MemTotal`, 4 at 3 GiB+, 2 below that, dropping to 1 on
+very low RAM; the count is capped by CPU count. Set
+`DNA_PAYLOAD_WORKERS=<1-8>` to override it. Bzip2, Brotli and Zstd operations
+still use the bundled helpers through non-blocking pipes.
+
 To build the superchunk helpers from source instead of using the prebuilt
 `merge_superchunk`, `seprate_superchunk` and `chunk_split`:
 

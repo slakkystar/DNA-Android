@@ -7,6 +7,8 @@ def superchunkFromSource = (project.findProperty("superchunkFromSource") ?: "fal
 def f2fsClean = (project.findProperty("f2fsClean") ?: "false").toString().toBoolean()
 def dnaAssetsDir = new File(buildDir, "generated/dnaAssets")
 def dnaSourceFile = file("src/main/assets/tools/dna.c")
+def xzEmbeddedDir = file("src/main/cpp/xz-embedded")
+def xzSourceFiles = ["xz_crc32.c", "xz_crc64.c", "xz_dec_lzma2.c", "xz_dec_stream.c", "xz_dec_bcj.c"].collect { new File(xzEmbeddedDir, it) }
 def f2fsToolSources = file("src/main/assets/tools-f2fs")
 def superchunkSources = [
     merge_superchunk: file("src/main/assets/tools/merge_superchunk.sh"),
@@ -103,6 +105,8 @@ task prepareDnaAssets {
     def localAssets = file("src/main/assets")
     inputs.dir(localAssets)
     inputs.file(dnaSourceFile)
+    inputs.dir(xzEmbeddedDir)
+    inputs.files(xzSourceFiles)
     superchunkSources.each { name, source -> inputs.file(source) }
     inputs.dir(f2fsToolSources)
     inputs.property("dnaFromSource", dnaFromSource)
@@ -136,14 +140,29 @@ task prepareDnaAssets {
         if (dnaFromSource) {
             delete stagedBinary
             stagedBinary.parentFile.mkdirs()
+            def xzFlags = [
+                "-I${xzEmbeddedDir.absolutePath}",
+                "-DDNA_HAVE_XZ",
+                "-DXZ_USE_CRC64",
+                "-DXZ_DEC_X86",
+                "-DXZ_DEC_ARM",
+                "-DXZ_DEC_ARMTHUMB",
+                "-DXZ_DEC_ARM64",
+                "-DXZ_DEC_RISCV",
+                "-DXZ_DEC_POWERPC",
+                "-DXZ_DEC_IA64",
+                "-DXZ_DEC_SPARC"
+            ]
             exec {
-                commandLine compiler.absolutePath, "-O2", "-Wall", "-Wextra", "-fPIE", "-pie", "-o", stagedBinary.absolutePath, dnaSourceFile.absolutePath
+                commandLine([compiler.absolutePath, "-O3", "-Wall", "-Wextra", "-fPIE", "-pie"] +
+                    xzFlags + ["-o", stagedBinary.absolutePath, dnaSourceFile.absolutePath] +
+                    xzSourceFiles.collect { it.absolutePath })
             }
             if (!stagedBinary.isFile()) {
                 throw new GradleException("dna compilation did not produce ${stagedBinary}")
             }
             stagedBinary.setExecutable(true, false)
-            logger.lifecycle("dna: built ${stagedBinary} from ${dnaSourceFile.name}")
+            logger.lifecycle("dna: built ${stagedBinary} from ${dnaSourceFile.name} with xz-embedded")
         } else {
             logger.lifecycle("dna: using prebuilt ${stagedBinary}")
         }
