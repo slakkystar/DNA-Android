@@ -1161,10 +1161,40 @@ static void rg_add(ranges_t *r, uint64_t blk) {
     r->v[r->n++] = blk; r->v[r->n++] = blk + 1;
 }
 
+static void rg_add_span(ranges_t *r, uint64_t start, uint64_t end) {
+    if (start >= end) return;
+    if (r->n && r->v[r->n - 1] >= start) {
+        if (end > r->v[r->n - 1]) r->v[r->n - 1] = end;
+        return;
+    }
+    if (r->n + 2 > r->cap) { r->cap = r->cap ? r->cap * 2 : 64; r->v = realloc(r->v, r->cap * sizeof *r->v); }
+    r->v[r->n++] = start; r->v[r->n++] = end;
+}
+
 static void rg_print(FILE *f, const char *cmd, const ranges_t *r) {
     fprintf(f, "%s %zu", cmd, r->n);
     for (size_t i = 0; i < r->n; i++) fprintf(f, ",%llu", (unsigned long long)r->v[i]);
     fputc('\n', f);
+}
+
+static int dat_read_blocks(img_t *im, FILE *d, ranges_t *zero, ranges_t *data, uint8_t *buf, uint64_t start, uint64_t end) {
+    int rc = 0;
+    for (uint64_t b = start; b < end && !rc; ) {
+        uint64_t nb = end - b; if (nb > 256) nb = 256;
+        memset(buf, 0, nb * 4096);
+        uint64_t off = b * 4096, have = im->size > off ? im->size - off : 0;
+        if (have > nb * 4096) have = nb * 4096;
+        if (have && !img_read(im, off, buf, have)) { rc = -1; break; }
+        for (uint64_t i = 0; i < nb; i++) {
+            uint64_t blk = b + i;
+            const uint8_t *p = buf + i * 4096;
+            if (blk == 0) { if (fwrite(p, 1, 4096, d) != 4096) rc = -1; continue; }
+            if (blk_zero(p)) rg_add(zero, blk);
+            else { rg_add(data, blk); if (fwrite(p, 1, 4096, d) != 4096) rc = -1; }
+        }
+        b += nb;
+    }
+    return rc;
 }
 
 /* Layout follows the original: block 0 ("clobbered") is always sent first, then the zero blocks,
@@ -1178,18 +1208,33 @@ static int img_to_dat(const char *img, const char *outdir, const char *name, int
     FILE *d = fopen(datp, "wb"); if (!d) { img_close(&im); return -1; }
     uint64_t nblk = (im.size + 4095) / 4096; ranges_t zero = {0}, data = {0};
     uint8_t *buf = malloc(1 << 20); int rc = 0;
-    for (uint64_t b = 0; b < nblk && !rc; ) {
-        uint64_t nb = nblk - b; if (nb > 256) nb = 256;
-        memset(buf, 0, nb * 4096);
-        uint64_t off = b * 4096, have = im.size > off ? im.size - off : 0; if (have > nb * 4096) have = nb * 4096;
-        if (have && !img_read(&im, off, buf, have)) { rc = -1; break; }
-        for (uint64_t i = 0; i < nb; i++) {
-            uint64_t blk = b + i; const uint8_t *p = buf + i * 4096;
-            if (blk == 0) { if (fwrite(p, 1, 4096, d) != 4096) rc = -1; continue; }
-            if (blk_zero(p)) rg_add(&zero, blk);
-            else { rg_add(&data, blk); if (fwrite(p, 1, 4096, d) != 4096) rc = -1; }
+    if (im.sparse) rc = dat_read_blocks(&im, d, &zero, &data, buf, 0, nblk);
+    else {
+        uint64_t start = 0;
+        if (nblk) { rc = dat_read_blocks(&im, d, &zero, &data, buf, 0, 1); start = 1; }
+        uint64_t next = start;
+        int seek_ok = 1;
+        while (!rc && next < nblk) {
+            if (seek_ok) {
+                off_t dpos = lseek(fileno(im.f), (off_t)(next * 4096), SEEK_DATA);
+                if (dpos < 0) {
+                    if (errno == ENXIO) { rg_add_span(&zero, next, nblk); next = nblk; break; }
+                    seek_ok = 0;
+                } else {
+                    uint64_t db = (uint64_t)dpos / 4096;
+                    if (db > next) { rg_add_span(&zero, next, db); next = db; if (next >= nblk) break; }
+                    off_t hpos = lseek(fileno(im.f), (off_t)(next * 4096), SEEK_HOLE);
+                    uint64_t hb = hpos < 0 ? nblk : ((uint64_t)hpos + 4095) / 4096;
+                    if (hb > nblk) hb = nblk;
+                    if (hb <= next) hb = nblk;
+                    rc = dat_read_blocks(&im, d, &zero, &data, buf, next, hb);
+                    next = hb;
+                    continue;
+                }
+            }
+            rc = dat_read_blocks(&im, d, &zero, &data, buf, next, nblk);
+            next = nblk;
         }
-        b += nb;
     }
     free(buf); img_close(&im);
     if (!rc) sync_output(d);
