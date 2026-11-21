@@ -52,6 +52,22 @@ static uint64_t meminfo_kb(const char *key);
 #define VPRINTF(...) do { if (g_debug) printf(__VA_ARGS__); } while (0)
 #define VWARN(...) do { if (g_debug) fprintf(stderr, __VA_ARGS__); } while (0)
 
+static void fadv_seq(FILE *f) {
+    if (f) posix_fadvise(fileno(f), 0, 0, POSIX_FADV_SEQUENTIAL);
+}
+
+static void drop_cache_path(const char *path) {
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd >= 0) {
+        posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
+        close(fd);
+    }
+}
+
+static void sync_output(FILE *f) {
+    if (f) { fflush(f); fsync(fileno(f)); }
+}
+
 static void part_start(void) {
     clock_gettime(CLOCK_MONOTONIC, &g_part_t0);
 }
@@ -1060,8 +1076,9 @@ static int raw_to_sparse(const char *src, const char *dst) {
         fwrite(&ch, 2, 1, o); fwrite(&bsz, 4, 1, o); fwrite(&tb, 4, 1, o); fwrite(&w.chunks, 4, 1, o); fwrite(&zero32, 4, 1, o);
     }
     free(buf); free(zero); free(run); close(fd);
+    if (!rc) sync_output(o);
     if (fclose(o)) rc = -1;
-    if (rc) remove(dst);
+    if (rc) remove(dst); else drop_cache_path(dst);
     return rc;
 }
 
@@ -1094,6 +1111,7 @@ static int img_to_dat(const char *img, const char *outdir, const char *name, int
     char datp[4600], tlp[4600], pdp[4600];
     snprintf(datp, sizeof datp, "%s/%s.new.dat", outdir, name); snprintf(tlp, sizeof tlp, "%s/%s.transfer.list", outdir, name);
     snprintf(pdp, sizeof pdp, "%s/%s.patch.dat", outdir, name);
+    fadv_seq(im.f);
     FILE *d = fopen(datp, "wb"); if (!d) { img_close(&im); return -1; }
     uint64_t nblk = (im.size + 4095) / 4096; ranges_t zero = {0}, data = {0};
     uint8_t *buf = malloc(1 << 20); int rc = 0;
@@ -1111,7 +1129,9 @@ static int img_to_dat(const char *img, const char *outdir, const char *name, int
         b += nb;
     }
     free(buf); img_close(&im);
+    if (!rc) sync_output(d);
     if (fclose(d)) rc = -1;
+    if (!rc) drop_cache_path(datp);
     if (!rc) {
         FILE *t = fopen(tlp, "w"), *pd = fopen(pdp, "wb");
         if (!t || !pd) rc = -1;
@@ -1256,12 +1276,13 @@ static int finish_output(const char *raw, const char *final, const ropts_t *o) {
         base_name(final, name, sizeof name);
         VPRINTF("> Converting to %s\n", o->out_kind == 2 ? "dat + brotli" : "dat"); fflush(stdout);
         rc = img_to_dat(raw, dir, name, o->brlvl > 0 ? o->brlvl : 3, o->out_kind == 2);
+        drop_cache_path(raw);
         remove(raw);
         if (!rc) { part_done_line(); printf("> Done: %s/%s.%s\n", dir, name, o->out_kind == 2 ? "new.dat.br" : "new.dat"); }
         return rc;
     }
     if (!access(final, F_OK)) VPRINTF("> Replacing existing: %s\n", final);
-    if (o->sparse && !o->out_kind) { VPRINTF("> Converting to sparse\n"); fflush(stdout); rc = raw_to_sparse(raw, final); remove(raw); }
+    if (o->sparse && !o->out_kind) { VPRINTF("> Converting to sparse\n"); fflush(stdout); rc = raw_to_sparse(raw, final); drop_cache_path(raw); remove(raw); }
     else rc = rename(raw, final);
     if (!rc) part_done_line();
     return rc;
@@ -2175,6 +2196,7 @@ static uint64_t (*g_free_fn)(const char *path) = NULL;
 static uint64_t perf_free_bytes(const char *path) {
     return g_free_fn ? g_free_fn(path) : free_bytes_path(path);
 }
+
 
 static void perf_detect(perf_t *p) {
     memset(p, 0, sizeof *p);
