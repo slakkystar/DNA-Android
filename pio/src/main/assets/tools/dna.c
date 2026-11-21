@@ -23,6 +23,7 @@
 #endif
 
 #define VERSION "1.0"
+#define EXTRACT_UNSUPPORTED (-2)
 
 /* ---------- format detection ---------- */
 
@@ -197,6 +198,12 @@ static int flag_val(int argc, char **argv, int *i) {
     return 1;
 }
 
+static void delete_path(const char *path) {
+    if (access(path, F_OK)) return;
+    printf("> Deleting: %s\n", path); fflush(stdout);
+    if (remove(path)) fprintf(stderr, "> Warning: cannot delete %s: %s\n", path, strerror(errno));
+}
+
 /* Slot handling. mode: "none" (default) = slot-a/unsuffixed partitions, suffix stripped (system_a -> system);
  * "a" / "b" = only that slot, suffix stripped; "both" = every partition, names kept as in the super.
  * Returns 1 if the partition is included and writes the output name into out. */
@@ -211,7 +218,7 @@ static int slot_pick(const char *mode, const char *name, char *out, size_t n) {
     return 1;
 }
 
-static int extract_one(const char *path, int *deleted_src, int auto_unpack);
+static int extract_one(const char *path, int auto_unpack, int delete_src);
 
 static int cmd_lpunpack(int argc, char **argv) {
     const char *parts = NULL, *file = NULL;
@@ -265,14 +272,22 @@ static int cmd_lpunpack(int argc, char **argv) {
         if (rc) { remove(out); break; }
         printf("> Done: %s\n", out); done++;
         if (autox) {
-            int d = 0;
             printf("> Auto-unpacking: %s\n", dn); fflush(stdout);
-            if (extract_one(out, &d, 0)) { fprintf(stderr, "> Warning: auto-unpack failed: %s\n", out); auto_fail = 1; }
+            int erc = extract_one(out, 1, del);
+            if (erc == EXTRACT_UNSUPPORTED) {
+                fprintf(stderr, "> Warning: unsupported image type: %s\n", out);
+                if (del) delete_path(out);
+            } else if (erc) {
+                fprintf(stderr, "> Warning: auto-unpack failed: %s\n", out);
+                auto_fail = 1;
+            } else if (del) {
+                delete_path(out);
+            }
         }
     }
     free(buf); img_close(&im);
     if (!rc && !done) { fprintf(stderr, "> Error: no matching partitions\n"); rc = 1; }
-    if (!rc && del) { printf("> Deleting: %s\n", file); remove(file); }
+    if (!rc && del) delete_path(file);
     return rc ? rc : auto_fail;
 }
 
@@ -633,7 +648,7 @@ static int dat_to_img(const char *dat, char *outimg, size_t on) {
 
 /* ---------- extract command ---------- */
 
-static int extract_one(const char *path, int *deleted_src, int auto_unpack);
+static int extract_one(const char *path, int auto_unpack, int delete_src);
 
 static int copy_file(const char *src, const char *dst) {
     FILE *a = fopen(src, "rb"); if (!a) return -1;
@@ -692,10 +707,10 @@ static int extract_raw_by_type(const char *img, const char *name, const char *pn
         return rc;
     }
     fprintf(stderr, "> Unsupported image type '%s': %s\n", t, name);
-    return 1;
+    return EXTRACT_UNSUPPORTED;
 }
 
-static int extract_one(const char *path, int *deleted_src, int auto_unpack) {
+static int extract_one(const char *path, int auto_unpack, int delete_src) {
     const char *dro = getenv("DNA_DRO");
     if (!dro || !*dro) { fprintf(stderr, "> Error: project is not selected (DNA_DRO is empty)\n"); return 1; }
     char full[4400]; snprintf(full, sizeof full, "%s", path);
@@ -703,7 +718,7 @@ static int extract_one(const char *path, int *deleted_src, int auto_unpack) {
     if (access(full, R_OK)) { fprintf(stderr, "> Error: file not found: %s\n", path); return 1; }
     char name[512], pname[512];
     base_name(full, name, sizeof name); part_name(full, pname, sizeof pname);
-    size_t fl = strlen(full); *deleted_src = 0;
+    size_t fl = strlen(full);
     int is_img = fl > 4 && !strcmp(full + fl - 4, ".img");
     int rc;
 
@@ -723,9 +738,10 @@ static int extract_one(const char *path, int *deleted_src, int auto_unpack) {
         return rc;
     }
 
-    char *la[4]; int n = 0;
+    char *la[6]; int n = 0;
     la[n++] = (char *)full;
     if (auto_unpack) { la[n++] = "--auto"; la[n++] = "1"; }
+    if (delete_src) { la[n++] = "--delete"; la[n++] = "1"; }
     la[n] = NULL;
     const char *t = detect_type(full);
     if (is_img) {
@@ -760,18 +776,21 @@ static int cmd_extract(int argc, char **argv) {
     }
     if (!nf) { fprintf(stderr, "usage: dna extract <files...> [--delete 0|1] [--auto 0|1]\n"); return 2; }
     for (int i = 0; i < nf; i++) {
-        int d; any = 1;
+        any = 1;
+        char full[4400]; snprintf(full, sizeof full, "%s", files[i]);
+        if (access(full, F_OK) && getenv("DNA_PRO")) snprintf(full, sizeof full, "%s/%s", getenv("DNA_PRO"), files[i]);
         size_t nl = strlen(files[i]);
         int is_img = nl > 4 && !strcmp(files[i] + nl - 4, ".img");
         if (!is_img) { printf("> Unpacking: %s\n", files[i]); fflush(stdout); }
-        int rc = extract_one(files[i], &d, autox);
+        int rc = extract_one(full, autox, del);
+        if (rc == EXTRACT_UNSUPPORTED) {
+            fprintf(stderr, "> Warning: unsupported image type: %s\n", files[i]);
+            if (del) delete_path(full);
+            continue;
+        }
         if (rc) { fprintf(stderr, "> Failed: %s\n", files[i]); fail = 1; continue; }
         if (!is_img) printf("> Done: %s\n", files[i]);
-        if (del) {
-            char full[4400]; snprintf(full, sizeof full, "%s", files[i]);
-            if (access(full, F_OK) && getenv("DNA_PRO")) snprintf(full, sizeof full, "%s/%s", getenv("DNA_PRO"), files[i]);
-            printf("> Deleting: %s\n", files[i]); remove(full);
-        }
+        if (del) delete_path(full);
     }
     return any && !fail ? 0 : 1;
 }
@@ -1994,7 +2013,7 @@ static int worker_run(pay_t *py, ppart_t *p, int pfd, int ofd, int id, int nwork
     return rc;
 }
 
-static int dumper_one(pay_t *py, ppart_t *p, int auto_unpack, int *auto_fail) {
+static int dumper_one(pay_t *py, ppart_t *p, int auto_unpack, int delete_img, int *auto_fail) {
 #ifdef DNA_HAVE_XZ
     xz_crc32_init();
 #ifdef XZ_USE_CRC64
@@ -2076,9 +2095,17 @@ static int dumper_one(pay_t *py, ppart_t *p, int auto_unpack, int *auto_fail) {
     if (rc) { fprintf(stderr, "> Error: failed to extract %s\n", p->name); remove(out); return 1; }
     printf("> Done: %s\n", out);
     if (auto_unpack) {
-        int dl = 0;
         printf("> Auto-unpacking: %s\n", p->name); fflush(stdout);
-        if (extract_one(out, &dl, 0)) { fprintf(stderr, "> Warning: auto-unpack failed: %s\n", out); *auto_fail = 1; }
+        int erc = extract_one(out, 1, delete_img);
+        if (erc == EXTRACT_UNSUPPORTED) {
+            fprintf(stderr, "> Warning: unsupported image type: %s\n", out);
+            if (delete_img) delete_path(out);
+        } else if (erc) {
+            fprintf(stderr, "> Warning: auto-unpack failed: %s\n", out);
+            *auto_fail = 1;
+        } else if (delete_img) {
+            delete_path(out);
+        }
     }
     return 0;
 }
@@ -2117,11 +2144,11 @@ static int cmd_dumper(int argc, char **argv) {
     for (uint32_t i = 0; i < py.nparts; i++) {
         if (want && !in_list(parts, py.parts[i].name)) continue;
         found = 1;
-        if (dumper_one(&py, &py.parts[i], autox, &auto_fail)) fail = 1;
+        if (dumper_one(&py, &py.parts[i], autox, del, &auto_fail)) fail = 1;
     }
     if (!found) { fprintf(stderr, "> Error: no matching partitions\n"); fail = 1; }
     pay_free(&py);
-    if (!fail && !auto_fail && del) { printf("> Deleting: %s\n", full); remove(full); }
+    if (!fail && !auto_fail && del) delete_path(full);
     return fail ? 1 : auto_fail;
 }
 
