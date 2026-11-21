@@ -96,10 +96,12 @@ To replace the bundled f2fs helpers with clean universal builds inside the APK:
 ```
 
 This stages `assets/tools-f2fs` over `assets/tools`: a clean `extract.f2fs`
-wrapper backed by the static `f2fs-extractor`, and an AOSP `sload_f2fs` with
-its shared libraries bundled via `$ORIGIN`. The original assets are not
-modified. The clean extractor handles uncompressed f2fs images; the bundled
-extractor remains available when `f2fsClean` is not enabled.
+wrapper backed by the static `f2fs-extractor`, and an AOSP `sload_f2fs` built
+with explicit `-s` file_contexts and `-t` mount-point handling. Its shared
+libraries (including `libandroid-selinux`) are bundled via `$ORIGIN`. The
+original assets are not modified. The clean extractor handles uncompressed
+f2fs images; the bundled extractor remains available when `f2fsClean` is not
+enabled.
 
 The GitHub Actions workflows expose `dna_from_source`, `superchunk_from_source`,
 `f2fs_clean` and `upload_to_telegram` inputs. Telegram upload requires the
