@@ -80,7 +80,7 @@
 <group title="Pack Menu">
     <action interruptible="false">
         <title>Pack a single partition</title>
-        <set>dna repack $IMG_DIR --read $Read --auto $Pack --format $img_type --type $repack_from --br $brze --erofs $erofsze --mode $type --compress $test --delavb $test1 --convert $tool</set>
+        <set>dna repack $IMG_DIR --read $Read --auto $Pack --format $img_type --type $repack_from --br $brze --erofs $erofsze --mode $type --compress $test --hal-fallback $hal_fallback --convert $tool</set>
         <param name="IMG_DIR" options-sh="samples/findfile.sh dir" desc="IMG packing format will be automatically detected" separator="," required="true" multiple="true"/>
         <param name="tool" label="Pack type">
              <option value="0"> ext4 </option>
@@ -112,7 +112,7 @@
              <option value="lzma">lzma</option>
         </param>
         <param name="test" label="Compress ext4 img space" desc="Note: only used when packing to ext4" type="switch" />
-        <param name="test1" label="Remove avb data encryption" desc="Note: this switch will modify the fstab file, the operation is not universal and may cause a bootloop." type="switch" />
+        <param name="hal_fallback" label="Fallback to hal_allocator_default_exec" value="1" desc="Note: applies only to newly added bin/hw files whose HAL type is not found in .cil. Disable to keep the partition default context instead." type="switch" />
     </action>
 
     <action interruptible="false">

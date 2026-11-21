@@ -80,9 +80,9 @@
     </text>
 
     <text>
-        <slice size="20" bold="true" break="true">Remove AVB Data Encryption</slice>
-        <slice break="true">Removes AVB (Android Verified Boot) flags from fstab and switches the corresponding entries to decrypt mode.</slice>
-        <slice break="true">In practice, this means: the userdata partition no longer requires forced encryption (forceencrypt/fileencryption), and the system no longer checks partition integrity via AVB signatures when mounting. This is necessary when you manually modify partitions — without disabling AVB, the device may enter a bootloop, since checksums after modification no longer match the expected ones.</slice>
+        <slice size="20" bold="true" break="true">HAL Context Fallback</slice>
+        <slice break="true">When a newly added file under bin/hw has no matching hal_*_default_exec type in the unpacked .cil files, use u:object_r:hal_allocator_default_exec:s0 instead of the partition default context.</slice>
+        <slice break="true">Enabled by default. Disable it to use the partition default (system_file, vendor_file, etc.) for unknown HAL binaries; a warning is printed in either case.</slice>
     </text>
 
     <text>
