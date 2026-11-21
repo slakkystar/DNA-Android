@@ -25,12 +25,19 @@ do
 done
 ;;
 split_sparse)
-find "$DNA_PRO" -maxdepth 1 -type f -exec basename {} \; | 
+{
+    find "$DNA_PRO" -maxdepth 1 -type f -exec basename {} \;
+    if [ -d "$DNA_PRO/out" ]; then
+        find "$DNA_PRO/out" -maxdepth 1 -type f -exec basename {} \;
+    fi
+} |
     sed -n 's/\(.*\)\.[0-9]\{1,\}$/\1/p; t; d' |
-    sort | uniq -c | 
-    while read -r count prefix; do
-        clean_prefix=$(echo "$prefix" | sed 's/[^a-zA-Z0-9._-]$//')
-        printf "%s|%s Total %d files\n" "$clean_prefix" "$clean_prefix" "$count"
+    sort | uniq -c |
+    while IFS= read -r line; do
+        line=${line#"${line%%[! ]*}"}
+        count=${line%% *}
+        prefix=${line#* }
+        printf "%s|%s Total %s files\n" "$prefix" "$prefix" "$count"
     done
 ;;
 vbmeta)

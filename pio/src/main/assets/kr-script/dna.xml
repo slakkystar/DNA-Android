@@ -191,37 +191,34 @@
 </group>
 
 <group title="Additional features">
-    <action>
-        <title>Merge split img files into super.img</title>
+    <action interruptible="false">
+        <title>Merge split img parts into an image</title>
     <set>
      chmod +x "$START_DIR/tools/merge_superchunk"
      "$START_DIR/tools/merge_superchunk"
     </set>
-        <desc>Restore the original super.img file</desc>
+        <desc>Restore an image from .0, .1, ... parts. Raw parts and legacy sparse parts are detected automatically.</desc>
         <param name="silence" label="Delete source files" type="checkbox" />
-        <param name="IMG" title="Select split IMG files" 
-            options-sh="samples/findfile.sh split_sparse" 
-            desc="Detect files in /sdcard/DNA project path" 
+        <param name="IMG" title="Select split IMG files"
+            options-sh="samples/findfile.sh split_sparse"
+            desc="Detect parts in /sdcard/DNA project path and its out directory"
             required="true" multiple="true"/>
     </action>
 
-    <action>
-        <title>Split super.img into multiple parts</title>
+    <action interruptible="false">
+        <title>Split an img into multiple parts</title>
     <set>
      chmod +x "$START_DIR/tools/seprate_superchunk"
      "$START_DIR/tools/seprate_superchunk"
     </set>
-        <desc>Split super.img sparsely into multiple evenly sized parts</desc>
-        <!-- Optional: delete original file -->
+        <desc>Split any image into evenly sized raw chunks that merge back byte-for-byte.</desc>
         <param name="silence" label="Delete source files" type="checkbox" />
-        <!-- File selector -->
-        <param name="IMG" title="Select super.img file" 
-               options-sh="samples/findfile.sh img" 
-               desc="Detect .img files in /sdcard/DNA project path" 
+        <param name="IMG" title="Select image file"
+               options-sh="samples/findfile.sh img"
+               desc="Detect .img files in /sdcard/DNA project path"
                required="true" multiple="true"/>
-        <!-- Split count dropdown -->
-        <param name="parts" title="Select number of parts (4 to 25):" 
-               desc="Split the selected super.img into evenly sized data chunks" 
+        <param name="parts" title="Select number of parts (4 to 25):"
+               desc="Split the selected image into evenly sized chunks"
                type="select" required="true">
             <option value="4">4</option>
             <option value="5">5</option>

@@ -89,6 +89,15 @@ This stages `merge_superchunk.sh` and `seprate_superchunk.sh` as executable
 helpers and compiles `chunk_split.c` into `chunk_split`. The source files are
 not packaged in either mode. Without the flag the prebuilt binaries are used.
 
+The source splitter works with any image, not only `super.img`: it writes evenly
+sized raw chunks, preserves sparse images byte-for-byte, and does not need a
+temporary copy or `bc`/`awk`. The merger auto-detects those raw chunks and the
+legacy sparse chunks produced by older builds; legacy chunks still go through
+`simg2img`, while raw chunks are concatenated directly. Part files are found in
+the project root and in its `out` directory, and gaps in the numbering abort the
+merge instead of producing a corrupt image. Both actions are non-interruptible
+so the Exit button cannot stop a running merge or split.
+
 `assets/tools/patch_vbmeta` is also staged from `assets/tools/patch_vbmeta.sh`
 by default; the shell source replaces the shc-compiled prebuilt inside the APK.
 It patches the AVB flags at offset 120 the same way
