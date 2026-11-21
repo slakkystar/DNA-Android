@@ -20,6 +20,11 @@
 #include <signal.h>
 #include <ctype.h>
 #include <time.h>
+#include <sys/statvfs.h>
+#include <sys/prctl.h>
+#include <sys/syscall.h>
+#include <sys/sendfile.h>
+#include <sched.h>
 #ifdef DNA_HAVE_XZ
 #include "xz.h"
 #endif
@@ -30,6 +35,12 @@
 static int g_debug = 0;
 static int g_repack_quiet = 0;
 static struct timespec g_part_t0;
+static const char *g_sysroot = "";
+
+static const char *syspath(char *buf, size_t n, const char *rel) {
+    snprintf(buf, n, "%s%s", g_sysroot, rel);
+    return buf;
+}
 
 #define VPRINTF(...) do { if (g_debug) printf(__VA_ARGS__); } while (0)
 #define VWARN(...) do { if (g_debug) fprintf(stderr, __VA_ARGS__); } while (0)
@@ -2391,7 +2402,8 @@ static uint64_t ext_bytes(const pext_t *e, uint32_t n, uint64_t bs) {
 }
 
 static uint64_t meminfo_kb(const char *key) {
-    FILE *f = fopen("/proc/meminfo", "r");
+    char path[4096];
+    FILE *f = fopen(syspath(path, sizeof path, "/proc/meminfo"), "r");
     if (!f) return 0;
     char line[256];
     size_t kl = strlen(key);
@@ -2406,6 +2418,239 @@ static uint64_t meminfo_kb(const char *key) {
     }
     fclose(f);
     return v;
+}
+
+
+typedef enum { PERF_SAVER = 0, PERF_BALANCED, PERF_FAST, PERF_TURBO, PERF_MANUAL } perf_class_t;
+typedef enum { STORAGE_UNKNOWN = 0, STORAGE_EMMC, STORAGE_UFS, STORAGE_NVME, STORAGE_OTHER } storage_kind_t;
+
+typedef struct {
+    uint64_t mem_total_kb, mem_avail_kb, swap_total_kb, swap_free_kb;
+    int ncpu_online, ncpu_conf, big_cores, little_cores, cpu_budget;
+    storage_kind_t storage;
+    int temp_battery_c, temp_skin_c, temp_soc_c;
+    int psi_mem_avg10, psi_cpu_avg10, psi_io_avg10;
+    uint64_t free_tmp_bytes, free_pro_bytes;
+    perf_class_t cls;
+    int part_jobs, total_cpu_threads, erofs_workers, brotli_jobs, zstd_threads, nice_level, reserve_mb;
+} perf_t;
+
+static uint64_t read_u64_path(const char *path) {
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+    unsigned long long v = 0;
+    if (fscanf(f, "%llu", &v) != 1) v = 0;
+    fclose(f);
+    return v;
+}
+
+static int read_text_path(const char *path, char *out, size_t n) {
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+    out[0] = 0;
+    if (!fgets(out, (int)n, f)) { fclose(f); return 0; }
+    fclose(f);
+    out[strcspn(out, "\r\n")] = 0;
+    return 1;
+}
+
+static int lower_has(const char *s, const char *needle) {
+    char a[128], b[128];
+    size_t i;
+    for (i = 0; s[i] && i + 1 < sizeof a; i++) a[i] = (char)tolower((unsigned char)s[i]);
+    a[i] = 0;
+    for (i = 0; needle[i] && i + 1 < sizeof b; i++) b[i] = (char)tolower((unsigned char)needle[i]);
+    b[i] = 0;
+    return strstr(a, b) != NULL;
+}
+
+static int norm_temp(long v) {
+    if (v > 1000) v /= 1000;
+    else if (v > 150) v /= 10;
+    if (v < -20 || v > 150) return 0;
+    return (int)v;
+}
+
+static int dir_has_prefix(const char *dir, const char *prefix) {
+    DIR *d = opendir(dir);
+    if (!d) return 0;
+    struct dirent *de;
+    int found = 0;
+    size_t pl = strlen(prefix);
+    while ((de = readdir(d))) {
+        if (!strncmp(de->d_name, prefix, pl)) { found = 1; break; }
+    }
+    closedir(d);
+    return found;
+}
+
+static int dir_has_substr(const char *dir, const char *needle) {
+    DIR *d = opendir(dir);
+    if (!d) return 0;
+    struct dirent *de;
+    int found = 0;
+    while ((de = readdir(d))) {
+        if (strstr(de->d_name, needle)) { found = 1; break; }
+    }
+    closedir(d);
+    return found;
+}
+
+static int storage_detect(void) {
+    char p[4096];
+    if (!access(syspath(p, sizeof p, "/sys/block/mmcblk0"), F_OK)) return STORAGE_EMMC;
+    if (!access(syspath(p, sizeof p, "/sys/block/nvme0n1"), F_OK)) return STORAGE_NVME;
+    int sda = !access(syspath(p, sizeof p, "/sys/block/sda"), F_OK);
+    char cls[4096], plat[4096];
+    syspath(cls, sizeof cls, "/sys/class");
+    syspath(plat, sizeof plat, "/sys/devices/platform");
+    if (sda && (dir_has_prefix(cls, "ufs") || dir_has_substr(plat, "ufs"))) return STORAGE_UFS;
+    if (!access(syspath(p, sizeof p, "/sys/block"), F_OK) && dir_has_prefix(syspath(p, sizeof p, "/sys/block"), "s")) return STORAGE_OTHER;
+    if (!access(syspath(p, sizeof p, "/sys/block/mmcblk"), F_OK)) return STORAGE_OTHER;
+    DIR *d = opendir(syspath(p, sizeof p, "/sys/block"));
+    if (!d) return STORAGE_UNKNOWN;
+    struct dirent *de;
+    int any = 0;
+    while ((de = readdir(d))) if (de->d_name[0] != '.') { any = 1; break; }
+    closedir(d);
+    return any ? STORAGE_OTHER : STORAGE_UNKNOWN;
+}
+
+static void thermal_scan(int *battery, int *skin, int *soc) {
+    char dir[4096], p[4096], type[128];
+    syspath(dir, sizeof dir, "/sys/class/thermal");
+    DIR *d = opendir(dir);
+    if (d) {
+        struct dirent *de;
+        while ((de = readdir(d))) {
+            if (strncmp(de->d_name, "thermal_zone", 12)) continue;
+            snprintf(p, sizeof p, "%s/%s/type", dir, de->d_name);
+            if (!read_text_path(p, type, sizeof type)) continue;
+            snprintf(p, sizeof p, "%s/%s/temp", dir, de->d_name);
+            int t = norm_temp((long)read_u64_path(p));
+            if (!t) continue;
+            if (lower_has(type, "battery") || lower_has(type, "bms")) { if (t > *battery) *battery = t; }
+            else if (lower_has(type, "skin") || lower_has(type, "quiet_therm") || lower_has(type, "xo_therm") || lower_has(type, "case")) { if (t > *skin) *skin = t; }
+            else if (lower_has(type, "cpu") || lower_has(type, "gpu") || lower_has(type, "soc") || lower_has(type, "cpuss") || lower_has(type, "mtktscpu")) { if (t > *soc) *soc = t; }
+        }
+        closedir(d);
+    }
+    if (!*battery) {
+        syspath(p, sizeof p, "/sys/class/power_supply/battery/temp");
+        int t = norm_temp((long)read_u64_path(p));
+        if (t) *battery = t;
+    }
+}
+
+static int psi_read(const char *rel) {
+    char p[4096], line[512];
+    FILE *f = fopen(syspath(p, sizeof p, rel), "r");
+    if (!f) return 0;
+    int v = 0;
+    while (fgets(line, sizeof line, f)) {
+        if (strncmp(line, "some", 4)) continue;
+        char *a = strstr(line, "avg10=");
+        if (a) { double d = strtod(a + 6, NULL); if (d > 0) v = (int)d; }
+        break;
+    }
+    fclose(f);
+    return v;
+}
+
+static uint64_t free_bytes_path(const char *path) {
+    struct statvfs sv;
+    if (!path || !*path || statvfs(path, &sv)) return 0;
+    return (uint64_t)sv.f_bavail * (uint64_t)sv.f_frsize;
+}
+
+static void perf_detect(perf_t *p) {
+    memset(p, 0, sizeof *p);
+    p->mem_total_kb = meminfo_kb("MemTotal");
+    p->mem_avail_kb = meminfo_kb("MemAvailable");
+    if (!p->mem_avail_kb) p->mem_avail_kb = meminfo_kb("MemFree") + meminfo_kb("Buffers") + meminfo_kb("Cached");
+    p->swap_total_kb = meminfo_kb("SwapTotal");
+    p->swap_free_kb = meminfo_kb("SwapFree");
+
+    long on = sysconf(_SC_NPROCESSORS_ONLN), conf = sysconf(_SC_NPROCESSORS_CONF);
+    p->ncpu_online = on > 0 ? (int)on : 1;
+    p->ncpu_conf = conf > 0 ? (int)conf : p->ncpu_online;
+    cpu_set_t set;
+    if (sched_getaffinity(0, sizeof set, &set) == 0) {
+        int n = CPU_COUNT(&set);
+        if (n > 0 && n < p->ncpu_online) p->ncpu_online = n;
+    }
+    uint64_t caps[256] = {0};
+    int have[256] = {0}, maxc = 0;
+    int limit = p->ncpu_conf > 256 ? 256 : p->ncpu_conf;
+    for (int i = 0; i < limit; i++) {
+        char path[4096];
+        snprintf(path, sizeof path, "%s/sys/devices/system/cpu/cpu%d/cpu_capacity", g_sysroot, i);
+        uint64_t v = read_u64_path(path);
+        if (!v) {
+            snprintf(path, sizeof path, "%s/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_max_freq", g_sysroot, i);
+            v = read_u64_path(path);
+        }
+        if (v) { caps[i] = v; have[i] = 1; if ((int)v > maxc) maxc = (int)v; }
+    }
+    if (!maxc) {
+        p->big_cores = p->ncpu_online;
+    } else {
+        for (int i = 0; i < limit; i++) if (have[i]) {
+            if ((int)caps[i] * 4 >= maxc * 3) p->big_cores++;
+            else p->little_cores++;
+        }
+    }
+    p->cpu_budget = p->big_cores + p->little_cores / 2;
+    if (p->cpu_budget > p->ncpu_online - 1) p->cpu_budget = p->ncpu_online - 1;
+    if (p->cpu_budget < 1) p->cpu_budget = 1;
+    if (p->cpu_budget > 12) p->cpu_budget = 12;
+
+    p->storage = (storage_kind_t)storage_detect();
+    thermal_scan(&p->temp_battery_c, &p->temp_skin_c, &p->temp_soc_c);
+    p->psi_mem_avg10 = psi_read("/proc/pressure/memory");
+    p->psi_cpu_avg10 = psi_read("/proc/pressure/cpu");
+    p->psi_io_avg10 = psi_read("/proc/pressure/io");
+
+    const char *tmp = getenv("DNA_TMP");
+    if (!tmp || !*tmp) tmp = getenv("TMPDIR");
+    if (!tmp || !*tmp) tmp = "/data/local/tmp";
+    p->free_tmp_bytes = free_bytes_path(tmp);
+    const char *pro = getenv("DNA_PRO");
+    if (pro && *pro) {
+        char out[4096];
+        snprintf(out, sizeof out, "%s/out", pro);
+        p->free_pro_bytes = free_bytes_path(out);
+    }
+}
+
+static void thermal_thresholds(const char *env, int dw, int dh, int dc, int *w, int *h, int *c) {
+    *w = dw; *h = dh; *c = dc;
+    const char *s = getenv(env);
+    if (!s || !*s) return;
+    int a, b, d;
+    char tail;
+    if (sscanf(s, "%d,%d,%d%c", &a, &b, &d, &tail) != 3) return;
+    if (!(a < b && b < d) || a < -50 || d > 200) return;
+    *w = a; *h = b; *c = d;
+}
+
+static int perf_thermal_level(const perf_t *p) {
+    int bw, bh, bc, sw, sh, sc, ow, oh, oc;
+    thermal_thresholds("DNA_THERMAL_BATTERY", 40, 43, 46, &bw, &bh, &bc);
+    thermal_thresholds("DNA_THERMAL_SKIN", 42, 45, 48, &sw, &sh, &sc);
+    thermal_thresholds("DNA_THERMAL_SOC", 80, 90, 98, &ow, &oh, &oc);
+    int lvl = 0;
+    int vals[3] = { p->temp_battery_c, p->temp_skin_c, p->temp_soc_c };
+    int th[3][3] = { { bw, bh, bc }, { sw, sh, sc }, { ow, oh, oc } };
+    for (int i = 0; i < 3; i++) {
+        if (!vals[i]) continue;
+        int x = 0;
+        if (vals[i] >= th[i][2]) x = 3;
+        else if (vals[i] >= th[i][1]) x = 2;
+        else if (vals[i] >= th[i][0]) x = 1;
+        if (x > lvl) lvl = x;
+    }
+    return lvl;
 }
 
 static int payload_workers(void) {
