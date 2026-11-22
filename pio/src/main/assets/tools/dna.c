@@ -1364,7 +1364,7 @@ static int read_opt(const char *path, const char *key, char *out, size_t n) {
 }
 
 typedef struct {
-    int rw, autosize, sparse, out_kind, brlvl, erofslvl, shrink, delavb, hal_fallback, nofsck, incremental;
+    int rw, autosize, sparse, out_kind, brlvl, erofslvl, shrink, delavb, hal_fallback, nofsck, incremental, auto_speed;
     char mode[16];
     int erofs_workers;
 } ropts_t;
@@ -3081,10 +3081,25 @@ static int tasks_cancel(build_task_t *t, int nt, const char *pro) {
     return 130;
 }
 
+static int autospeed_apply(ropts_t *o, perf_class_t cls) {
+    if (!o->auto_speed || strcmp(o->mode, "lz4hc")) return 0;
+    int e = 9, b = 6;
+    switch (cls) {
+    case PERF_SAVER: e = 4; b = 2; break;
+    case PERF_BALANCED: e = 6; b = 3; break;
+    case PERF_FAST: e = 8; b = 5; break;
+    case PERF_TURBO: e = 9; b = 6; break;
+    default: return 0;
+    }
+    o->erofslvl = e;
+    o->brlvl = b;
+    return 1;
+}
+
 /* dna repack <dirs,...> --read 1|0 --auto 1|0 --format 0|1 --type 0|1|2 --br N --erofs N --mode lz4hc|lz4|lzma
  *            --compress 0|1 --delavb 0|1 --hal-fallback 0|1 --no-fsck 0|1 --convert 0|1|2   (convert: 0 ext4, 1 erofs, 2 f2fs) */
 static int cmd_repack_impl(int argc, char **argv) {
-    ropts_t o = { 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, "lz4hc", 0 }; int conv = 0, inc_set = 0;
+    ropts_t o = { 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "lz4hc", 0 }; int conv = 0, inc_set = 0;
     char *names[128]; int nn = 0;
     perf_ovr_t ov; perf_ovr_from_env(&ov);
     for (int i = 0; i < argc; i++) {
@@ -3101,6 +3116,7 @@ static int cmd_repack_impl(int argc, char **argv) {
         else if (!strcmp(a, "--hal-fallback")) o.hal_fallback = flag_val(argc, argv, &i);
         else if (!strcmp(a, "--no-fsck")) o.nofsck = flag_val(argc, argv, &i);
         else if (!strcmp(a, "--incremental")) { o.incremental = flag_val(argc, argv, &i); inc_set = 1; }
+        else if (!strcmp(a, "--auto-speed")) o.auto_speed = flag_val(argc, argv, &i);
         else if (!strcmp(a, "--convert") && hasv) conv = atoi(argv[++i]);
         else if (!strcmp(a, "--profile") && hasv) {
             const char *v = argv[++i];
@@ -3139,6 +3155,8 @@ static int cmd_repack_impl(int argc, char **argv) {
     }
     perf_t perf; perf_detect(&perf);
     perf_make_plan(&perf, &ld, &ov);
+    if (autospeed_apply(&o, perf.cls))
+        printf("> Auto Speed: erofs lz4hc,%d, brotli %d (image size may differ)\n", o.erofslvl, o.brlvl);
     int tmax = perf.temp_battery_c;
     if (perf.temp_skin_c > tmax) tmax = perf.temp_skin_c;
     if (perf.temp_soc_c > tmax) tmax = perf.temp_soc_c;

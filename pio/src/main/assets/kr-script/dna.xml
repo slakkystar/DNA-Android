@@ -80,7 +80,7 @@
 <group title="Pack Menu">
     <action interruptible="false">
         <title>Pack a single partition</title>
-        <set>dna repack $IMG_DIR --read $Read --auto $Pack --format $img_type --type $repack_from --br $brze --erofs $erofsze --mode $type --compress $test --hal-fallback $hal_fallback --convert $tool --profile $perf</set>
+        <set>dna repack $IMG_DIR --read $Read --auto $Pack --format $img_type --type $repack_from --br $brze --erofs $erofsze --mode $type --compress $test --hal-fallback $hal_fallback --convert $tool --profile $perf --auto-speed $auto_speed</set>
         <param name="IMG_DIR" options-sh="samples/findfile.sh dir" desc="IMG packing format will be automatically detected" separator="," required="true" multiple="true"/>
         <param name="tool" label="Pack type">
              <option value="0"> ext4 </option>
@@ -121,6 +121,7 @@
             <option value="fast">Fast</option>
             <option value="turbo">Turbo</option>
         </param>
+        <param name="auto_speed" label="Auto Speed" desc="Uses the selected performance profile to change erofs lz4hc and brotli compression levels. The image size and read load will differ. Only applies with lz4hc; explicit level sliders are overridden." type="switch" />
     </action>
 
     <action interruptible="false">
