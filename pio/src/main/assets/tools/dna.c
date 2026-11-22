@@ -1293,7 +1293,7 @@ static int cmd_convert(int argc, char **argv) {
 
 #define REPACK_SUFFIX ""   /* built images keep the name they were unpacked with; they go to $DNA_PRO/out/ */
 
-typedef struct { uint64_t blocks, entries; } tstat_t;
+typedef struct { uint64_t blocks, entries, dirs; } tstat_t;
 
 static void tree_stat(const char *dir, tstat_t *st, int depth) {
     DIR *d = opendir(dir); if (!d || depth > 64) { if (d) closedir(d); return; }
@@ -1303,7 +1303,7 @@ static void tree_stat(const char *dir, tstat_t *st, int depth) {
         char p[8192]; snprintf(p, sizeof p, "%s/%s", dir, de->d_name);
         struct stat sb; if (lstat(p, &sb)) continue;
         n++; st->entries++;
-        if (S_ISDIR(sb.st_mode)) tree_stat(p, st, depth + 1);
+        if (S_ISDIR(sb.st_mode)) { st->dirs++; tree_stat(p, st, depth + 1); }
         else if (S_ISREG(sb.st_mode)) st->blocks += ((uint64_t)sb.st_size + 4095) / 4096 + (sb.st_size > (64 << 20) ? (uint64_t)sb.st_size / (128u << 20) + 1 : 0);
         else if (S_ISLNK(sb.st_mode) && sb.st_size >= 60) st->blocks += 1;
     }
@@ -1396,6 +1396,50 @@ static int finish_output(const char *raw, const char *final, const ropts_t *o) {
     return rc;
 }
 
+static int read_size_hint(const char *path) {
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+    int v = 0;
+    if (fscanf(f, "ratio_permille=%d", &v) != 1) v = 0;
+    fclose(f);
+    return v >= 500 && v <= 3000 ? v : 0;
+}
+
+static void write_size_hint(const char *path, int permille) {
+    if (permille < 500) permille = 500;
+    if (permille > 3000) permille = 3000;
+    FILE *f = fopen(path, "w");
+    if (!f) return;
+    fprintf(f, "ratio_permille=%d\n", permille);
+    fclose(f);
+}
+
+static uint64_t ext4_size_blocks(const char *name, const char *dro, const ropts_t *o, uint64_t *raw_est, uint64_t *inodes_out) {
+    char tree[4400], inf[4600], hint[4600];
+    snprintf(tree, sizeof tree, "%s/%s", dro, name);
+    tstat_t st = { 0, 0, 0 };
+    tree_stat(tree, &st, 0);
+    uint64_t inodes = st.entries + st.entries / 20 + st.dirs / 4 + 64;
+    uint64_t xattr_blocks = (st.entries * 128 + 4095) / 4096;
+    uint64_t est = (st.blocks + xattr_blocks + inodes * 256 / 4096) * 103 / 100 + 160;
+    if (raw_est) *raw_est = est;
+    if (inodes_out) *inodes_out = inodes;
+    uint64_t blocks;
+    if (!o->autosize) {
+        snprintf(inf, sizeof inf, "%s/config/%s_info", dro, name);
+        uint64_t sz = read_u64_file(inf);
+        if (sz >= 4096) return sz / 4096;
+    }
+    blocks = est * 105 / 100 + 2048;
+    snprintf(hint, sizeof hint, "%s/config/%s_dna_size_hint", dro, name);
+    int permille = read_size_hint(hint);
+    if (permille) {
+        uint64_t hb = est * (uint64_t)permille / 1000 * 103 / 100;
+        if (hb > blocks) blocks = hb;
+    }
+    return blocks;
+}
+
 static int repack_ext4(const char *name, const char *dro, const char *pro, const ropts_t *o) {
     char tree[4400], cfgd[4400], fsc[4600], fcx[4600], fso[4600], inf[4600], final[4600], raw[4700];
     snprintf(tree, sizeof tree, "%s/%s", dro, name); snprintf(cfgd, sizeof cfgd, "%s/config", dro);
@@ -1406,18 +1450,12 @@ static int repack_ext4(const char *name, const char *dro, const char *pro, const
     if (access(fsc, R_OK)) { fprintf(stderr, "> Error: %s not found\n", fsc); return 1; }
     if (access(fcx, R_OK)) { VWARN("> Warning: %s not found, SELinux labels will be missing\n", fcx); }
 
-    tstat_t st = {0, 0}; tree_stat(tree, &st, 0);
-    uint64_t inodes = st.entries + st.entries / 20 + 64;
-    uint64_t est = (st.blocks + inodes * 256 / 4096) * 103 / 100 + 160;      /* content + inode tables + fs overhead */
-    uint64_t blocks;
-    if (o->autosize) blocks = est * 105 / 100 + 2048;                       /* ~8 MiB free space */
-    else {
-        uint64_t sz = read_u64_file(inf);
-        if (sz < 4096) { VPRINTF("> Original size unknown (%s missing), using Auto\n", inf); blocks = est * 105 / 100 + 2048; }
-        else blocks = sz / 4096;
-    }
+    uint64_t est = 0, inodes = 0;
+    uint64_t blocks = ext4_size_blocks(name, dro, o, &est, &inodes);
+    if (!o->autosize && read_u64_file(inf) < 4096)
+        VPRINTF("> Original size unknown (%s missing), using Auto\n", inf);
     char uuid[64] = ""; read_opt(fso, "uuid", uuid, sizeof uuid);
-    int rc = 1;
+    int rc = 1, grew = 0;
     for (int attempt = 0; attempt < 8; attempt++) {
         VPRINTF("> Building <ext4> (%s): %s, %llu blocks (%llu MiB)\n", o->rw ? "RW" : "RO", name,
                (unsigned long long)blocks, (unsigned long long)(blocks * 4 / 1024)); fflush(stdout);
@@ -1447,7 +1485,8 @@ static int repack_ext4(const char *name, const char *dro, const char *pro, const
         rc = run(fd);
         if (!rc) break;
         if (!o->autosize) { fprintf(stderr, "> Error: content does not fit into the original size, use Auto size\n"); remove(raw); return 1; }
-        blocks = blocks * 112 / 100 + 512;
+        blocks = !grew ? blocks * 125 / 100 + 512 : blocks * 112 / 100 + 512;
+        grew = 1;
         VWARN("> Image too small, retrying with a larger size\n");
     }
     if (rc) { fprintf(stderr, "> Error: e2fsdroid failed\n"); remove(raw); return 1; }
@@ -1456,6 +1495,13 @@ static int repack_ext4(const char *name, const char *dro, const char *pro, const
         char *ck[] = { "e2fsck", "-fy", raw, NULL }; run(ck);
         char *rs[] = { "resize2fs", "-f", "-M", raw, NULL };
         if (run(rs)) VWARN("> Warning: shrink failed, keeping full size\n");
+    }
+    struct stat rs;
+    if (est && !stat(raw, &rs) && rs.st_blocks > 0) {
+        uint64_t used = (uint64_t)rs.st_blocks / 8;
+        int ratio = (int)(used * 1000 / est);
+        snprintf(inf, sizeof inf, "%s/%s_dna_size_hint", cfgd, name);
+        write_size_hint(inf, ratio);
     }
     if (finish_output(raw, final, o)) { fprintf(stderr, "> Error: cannot write %s\n", final); return 1; }
     if (!o->out_kind) printf("> Done: %s\n", final);
@@ -2104,7 +2150,7 @@ static int repack_f2fs(const char *name, const char *dro, const char *pro, const
         if (bytes < (64u << 20)) bytes = 0;
     }
     if (!bytes) {
-        tstat_t st = {0, 0}; tree_stat(tree, &st, 0);
+        tstat_t st = {0, 0, 0}; tree_stat(tree, &st, 0);
         bytes = st.blocks * 4096;
         bytes = bytes * 115 / 100 + (64u << 20);
     }
@@ -2623,24 +2669,14 @@ static int space_cmp_desc(const void *a, const void *b) {
 }
 
 static uint64_t estimate_repack_bytes(const char *name, const char *dro, int conv, const ropts_t *o) {
-    char tree[4400], inf[4600];
+    char tree[4400];
     snprintf(tree, sizeof tree, "%s/%s", dro, name);
     struct stat sb;
     if (stat(tree, &sb) || !S_ISDIR(sb.st_mode)) return 0;
-    tstat_t st = { 0, 0 };
+    tstat_t st = { 0, 0, 0 };
     tree_stat(tree, &st, 0);
     if (conv == 1 || conv == 2) return st.blocks * 4096;
-    uint64_t inodes = st.entries + st.entries / 20 + 64;
-    uint64_t est = (st.blocks + inodes * 256 / 4096) * 103 / 100 + 160;
-    uint64_t blocks;
-    if (o->autosize) blocks = est * 105 / 100 + 2048;
-    else {
-        snprintf(inf, sizeof inf, "%s/config/%s_info", dro, name);
-        uint64_t sz = read_u64_file(inf);
-        if (sz < 4096) blocks = est * 105 / 100 + 2048;
-        else blocks = sz / 4096;
-    }
-    return blocks * 4096;
+    return ext4_size_blocks(name, dro, o, NULL, NULL) * 4096;
 }
 
 static int perf_check_space(const char *pro, const char *dro, char *const *names, int nn, int conv, const ropts_t *o, int part_jobs) {
@@ -2957,7 +2993,7 @@ static int cmd_repack_impl(int argc, char **argv) {
         t->pipe_fd = -1;
         t->erofs_workers = perf.erofs_workers;
         if (t->kind != 3) {
-            tstat_t st = { 0, 0 };
+            tstat_t st = { 0, 0, 0 };
             tree_stat(tree, &st, 0);
             t->estimated_bytes = st.blocks * 4096;
             nonboot++;
