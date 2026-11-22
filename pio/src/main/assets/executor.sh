@@ -14,16 +14,16 @@ fi
 
 # Tools directory
 export DNA_DIR=$({SDCARD_PATH})/DNA
-if [ ! -d $DNA_DIR ];then
-   mkdir -p $DNA_DIR
+if [ ! -d "$DNA_DIR" ];then
+   mkdir -p "$DNA_DIR"
 fi
 if [ "$({ROOT_PERMISSION})" = "true" ];then
   export DNA_TMP=/data/DNA
 else
   export DNA_TMP=$({START_DIR})/DNA
 fi
-if [ -f $TMPDIR/DNA.ini ]; then
-  export dna_project=$(cat $TMPDIR/DNA.ini)
+if [ -f "$TMPDIR/DNA.ini" ]; then
+  export dna_project=$(cat "$TMPDIR/DNA.ini")
   export DNA_PRO=$DNA_DIR/$dna_project
   export DNA_DRO=$DNA_TMP/$dna_project
 fi
@@ -32,7 +32,7 @@ if [ -f "$START_DIR/DNA.debug" ]; then
   DNA_DEBUG="$(cat "$START_DIR/DNA.debug")"
 fi
 export DNA_DEBUG
-chown -R $APP_USER_ID:$APP_USER_ID $START_DIR
+chown -R "$APP_USER_ID:$APP_USER_ID" "$START_DIR"
 # Run script
 if [[ -f "$1" ]]; then
     chmod 755 "$1"

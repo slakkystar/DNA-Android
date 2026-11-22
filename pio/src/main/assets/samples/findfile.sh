@@ -1,25 +1,25 @@
 val=$1
-case ${val} in
+case "$val" in
 dir)
-ls -F $DNA_DRO | sed 's/\/$//g' | grep -v "config"
+ls -F "$DNA_DRO" | sed 's/\/$//g' | grep -v "config"
 ;;
 zip1)
-ls $DNA_DIR | grep -v "/$" | grep \."zip"$
+ls "$DNA_DIR" | grep -v "/$" | grep \."zip"$
 ;;
 img1)
-ls $DNA_DIR | grep -v "/$" | grep \."img"$
+ls "$DNA_DIR" | grep -v "/$" | grep \."img"$
 ;;
 br)
-ls $DNA_PRO | grep -v "/$" | grep \."br"$
+ls "$DNA_PRO" | grep -v "/$" | grep \."br"$
 ;;
 dat)
-ls $DNA_PRO | grep -v "/$" | grep \."new.dat"$
+ls "$DNA_PRO" | grep -v "/$" | grep \."new.dat"$
 ;;
 img)
-for i in $(ls $DNA_PRO | grep -v "/$" | grep \."img"$)
+for i in $(ls "$DNA_PRO" | grep -v "/$" | grep \."img"$)
 do
-    if [ -f $DNA_PRO/$i ];then
-        info=$(dna gettype $DNA_PRO/$i)
+    if [ -f "$DNA_PRO/$i" ];then
+        info=$(dna gettype "$DNA_PRO/$i")
         echo "$i|$i ($info)"
     fi
 done
@@ -41,19 +41,19 @@ split_sparse)
     done
 ;;
 vbmeta)
-    for i in $(ls $DNA_PRO | grep -E "^vbmeta.*\.img$"); do
+    for i in $(ls "$DNA_PRO" | grep -E "^vbmeta.*\.img$"); do
     if [ -f "$DNA_PRO/$i" ]; then
         echo "$i|$i (vbmeta)"
     fi
     done
 ;;
 zst_img)
-ls $DNA_PRO | grep -v "/$" | grep -E "\.(zst|zstd|img)$"
+ls "$DNA_PRO" | grep -v "/$" | grep -E "\.(zst|zstd|img)$"
 ;;
 u_zst_img)
-ls $DNA_PRO | grep -v "/$" | grep -E "\.(zst|zstd)$"
+ls "$DNA_PRO" | grep -v "/$" | grep -E "\.(zst|zstd)$"
 ;;
 *)
-ls $DNA_PRO | grep -v "/$" | grep \."$1"$
+ls "$DNA_PRO" | grep -v "/$" | grep \."$1"$
 ;;
 esac
