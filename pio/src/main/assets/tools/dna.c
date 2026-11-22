@@ -461,6 +461,25 @@ static int run_quiet(char *const argv[]) {
     return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
 }
 
+static pid_t spawn_filter(char *const argv[], int in_fd, int out_fd, int hide_err) {
+    pid_t p = fork();
+    if (p < 0) return -1;
+    if (p == 0) {
+        perf_child_setup();
+        if (dup2(in_fd, STDIN_FILENO) < 0 || dup2(out_fd, STDOUT_FILENO) < 0) _exit(1);
+        if (hide_err && g_repack_quiet) {
+            int fd = open("/dev/null", O_WRONLY);
+            if (fd >= 0) { dup2(fd, STDERR_FILENO); if (fd > 2) close(fd); }
+        }
+        if (in_fd > 2) close(in_fd);
+        if (out_fd > 2) close(out_fd);
+        execvp(argv[0], argv);
+        fprintf(stderr, "> Error: cannot run %s: %s\n", argv[0], strerror(errno));
+        _exit(127);
+    }
+    return p;
+}
+
 static int mkdir_p(const char *path) {
     char t[4096]; snprintf(t, sizeof t, "%s", path);
     for (char *s = t + 1; *s; s++) if (*s == '/') { *s = 0; mkdir(t, 0755); *s = '/'; }
@@ -1202,10 +1221,31 @@ static int dat_read_blocks(img_t *im, FILE *d, ranges_t *zero, ranges_t *data, u
 static int img_to_dat(const char *img, const char *outdir, const char *name, int br_level, int make_br) {
     img_t im; if (img_open(&im, img)) { fprintf(stderr, "> Error: cannot read %s\n", img); return -1; }
     char datp[4600], tlp[4600], pdp[4600];
-    snprintf(datp, sizeof datp, "%s/%s.new.dat", outdir, name); snprintf(tlp, sizeof tlp, "%s/%s.transfer.list", outdir, name);
+    snprintf(datp, sizeof datp, "%s/%s.%s", outdir, name, make_br ? "new.dat.br" : "new.dat");
+    snprintf(tlp, sizeof tlp, "%s/%s.transfer.list", outdir, name);
     snprintf(pdp, sizeof pdp, "%s/%s.patch.dat", outdir, name);
     fadv_seq(im.f);
-    FILE *d = fopen(datp, "wb"); if (!d) { img_close(&im); return -1; }
+    FILE *d = NULL;
+    pid_t filter = -1;
+    void (*old_pipe)(int) = SIG_DFL;
+    if (make_br) {
+        int pp[2];
+        if (pipe(pp)) { img_close(&im); return -1; }
+        fcntl(pp[1], F_SETFD, FD_CLOEXEC);
+        int ofd = open(datp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (ofd < 0) { close(pp[0]); close(pp[1]); img_close(&im); return -1; }
+        char q[16]; snprintf(q, sizeof q, "%d", br_level < 0 ? 3 : br_level > 11 ? 11 : br_level);
+        char *a[] = { "brotli", "-q", q, "-c", NULL };
+        filter = spawn_filter(a, pp[0], ofd, 1);
+        close(pp[0]); close(ofd);
+        if (filter < 0) { close(pp[1]); img_close(&im); return -1; }
+        d = fdopen(pp[1], "wb");
+        if (!d) { close(pp[1]); waitpid(filter, NULL, 0); img_close(&im); return -1; }
+        old_pipe = signal(SIGPIPE, SIG_IGN);
+    } else {
+        d = fopen(datp, "wb");
+        if (!d) { img_close(&im); return -1; }
+    }
     uint64_t nblk = (im.size + 4095) / 4096; ranges_t zero = {0}, data = {0};
     uint8_t *buf = malloc(1 << 20); int rc = 0;
     if (im.sparse) rc = dat_read_blocks(&im, d, &zero, &data, buf, 0, nblk);
@@ -1239,6 +1279,11 @@ static int img_to_dat(const char *img, const char *outdir, const char *name, int
     free(buf); img_close(&im);
     if (!rc) sync_output(d);
     if (fclose(d)) rc = -1;
+    if (filter > 0) {
+        int st = 0;
+        if (waitpid(filter, &st, 0) < 0 || !WIFEXITED(st) || WEXITSTATUS(st)) rc = -1;
+        signal(SIGPIPE, old_pipe);
+    }
     if (!rc) drop_cache_path(datp);
     if (!rc) {
         FILE *t = fopen(tlp, "w"), *pd = fopen(pdp, "wb");
@@ -1252,13 +1297,6 @@ static int img_to_dat(const char *img, const char *outdir, const char *name, int
         if (pd) fclose(pd);
     }
     free(zero.v); free(data.v);
-    if (!rc && make_br) {
-        char br[4700], q[16]; snprintf(br, sizeof br, "%s.br", datp); snprintf(q, sizeof q, "%d", br_level < 0 ? 3 : br_level > 11 ? 11 : br_level);
-        printf("> Compressing with brotli (level %s): %s.new.dat\n", q, name); fflush(stdout);
-        char *a[] = { "brotli", "-q", q, "-f", "-o", br, datp, NULL };
-        rc = run(a);
-        if (!rc) remove(datp);
-    }
     if (rc) { remove(datp); remove(tlp); remove(pdp); }
     return rc;
 }
