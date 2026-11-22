@@ -4314,12 +4314,279 @@ static const char *storage_name(storage_kind_t s) {
     }
 }
 
+static volatile sig_atomic_t g_bench_stop;
+static char g_bench_dir[4096];
+
+static void bench_on_signal(int sig) { (void)sig; g_bench_stop = 1; }
+
+static int bench_tool(const char *name) {
+    const char *path = getenv("PATH");
+    if (!path) return 0;
+    char tmp[8192];
+    snprintf(tmp, sizeof tmp, "%s", path);
+    for (char *p = strtok(tmp, ":"); p; p = strtok(NULL, ":")) {
+        char full[4400];
+        snprintf(full, sizeof full, "%s/%s", p, name);
+        if (!access(full, X_OK)) return 1;
+    }
+    return 0;
+}
+
+static double bench_now_ms(void) {
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (double)t.tv_sec * 1000.0 + (double)t.tv_nsec / 1000000.0;
+}
+
+static void bench_rm_rf(const char *path) {
+    struct stat st;
+    if (lstat(path, &st)) return;
+    if (S_ISDIR(st.st_mode)) {
+        DIR *d = opendir(path);
+        if (d) {
+            struct dirent *de;
+            while ((de = readdir(d))) {
+                if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
+                char child[8192];
+                snprintf(child, sizeof child, "%s/%s", path, de->d_name);
+                bench_rm_rf(child);
+            }
+            closedir(d);
+        }
+        rmdir(path);
+    } else {
+        unlink(path);
+    }
+}
+
+static int bench_make_tree(const char *dir) {
+    if (mkdir_p(dir)) return -1;
+    uint8_t *buf = malloc(1u << 20);
+    if (!buf) return -1;
+    unsigned r = 0x12345678u;
+    for (int f = 0; f < 64 && !g_bench_stop; f++) {
+        char path[4400];
+        snprintf(path, sizeof path, "%s/file_%02d.bin", dir, f);
+        for (size_t off = 0; off < (1u << 20); off += 4096) {
+            if ((off / 4096) % 3 == 0) {
+                memset(buf + off, (int)(unsigned char)(f * 17 + off / 4096), 4096);
+            } else {
+                for (size_t i = 0; i < 4096; i++) {
+                    r ^= r << 13; r ^= r >> 17; r ^= r << 5;
+                    buf[off + i] = (uint8_t)r;
+                }
+            }
+        }
+        FILE *o = fopen(path, "wb");
+        if (!o) { free(buf); return -1; }
+        int wr = fwrite(buf, 1, 1u << 20, o) == (1u << 20) ? 0 : -1;
+        if (fclose(o)) wr = -1;
+        if (wr) { free(buf); return -1; }
+    }
+    free(buf);
+    return g_bench_stop ? -1 : 0;
+}
+
+static int bench_write(const char *path, uint64_t bytes) {
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) return -1;
+    uint8_t *buf = malloc(1u << 20);
+    if (!buf) { close(fd); return -1; }
+    for (size_t i = 0; i < (1u << 20); i++) buf[i] = (uint8_t)(i * 31 + 7);
+    int rc = 0;
+    while (bytes && !g_bench_stop) {
+        size_t n = bytes > (1u << 20) ? (1u << 20) : (size_t)bytes;
+        if (write(fd, buf, n) != (ssize_t)n) { rc = -1; break; }
+        bytes -= n;
+    }
+    if (!rc && fsync(fd)) rc = -1;
+    close(fd); free(buf);
+    if (g_bench_stop) rc = -1;
+    return rc;
+}
+
+static void bench_cleanup(void) {
+    if (g_bench_dir[0]) { bench_rm_rf(g_bench_dir); g_bench_dir[0] = 0; }
+}
+
+static void bench_json_escape(const char *in, char *out, size_t n) {
+    size_t j = 0;
+    for (; *in && j + 2 < n; in++) {
+        if (*in == '"' || *in == '\\') out[j++] = '\\';
+        out[j++] = *in;
+    }
+    out[j] = 0;
+}
+
+static int perf_bench(perf_t *p) {
+    const char *base = getenv("DNA_TMP");
+    if (!base || !*base) base = getenv("TMPDIR");
+    if (!base || !*base) base = "/data/local/tmp";
+    snprintf(g_bench_dir, sizeof g_bench_dir, "%s/dna-bench-%d", base, (int)getpid());
+    if (mkdir_p(g_bench_dir)) { fprintf(stderr, "> bench: cannot create %s\n", g_bench_dir); return 1; }
+
+    struct sigaction sa, old_int, old_term;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = bench_on_signal;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGINT, &sa, &old_int);
+    sigaction(SIGTERM, &sa, &old_term);
+
+    int workers[4], nw = 0;
+    int budget = p->cpu_budget > 0 ? p->cpu_budget : 1;
+    int cand[4] = { 1, 2, 4, budget };
+    for (int i = 0; i < 4; i++) {
+        int v = cand[i];
+        if (v < 1 || v > budget) continue;
+        int dup = 0;
+        for (int j = 0; j < nw; j++) if (workers[j] == v) dup = 1;
+        if (!dup) workers[nw++] = v;
+    }
+
+    double etime[4] = { 0 };
+    int env = 0, best_e = 0;
+    char tree[4300], img[4400];
+    snprintf(tree, sizeof tree, "%s/tree", g_bench_dir);
+    snprintf(img, sizeof img, "%s/bench.img", g_bench_dir);
+    if (!bench_tool("mkfs.erofs")) {
+        printf("> bench: mkfs.erofs not found, skipping compression test\n");
+    } else if (!bench_make_tree(tree)) {
+        double best = -1;
+        for (int i = 0; i < nw && !g_bench_stop; i++) {
+            char wb[32];
+            snprintf(wb, sizeof wb, "--workers=%d", workers[i]);
+            char *a[] = { "mkfs.erofs", "-zlz4hc,9", wb, img, tree, NULL };
+            remove(img);
+            double t0 = bench_now_ms();
+            int rc = run_quiet(a);
+            double dt = bench_now_ms() - t0;
+            printf("> bench: erofs workers=%d: %.0f ms%s\n", workers[i], dt, rc ? " (failed)" : "");
+            etime[env++] = dt;
+            if (!rc && (best < 0 || dt < best)) { best = dt; best_e = workers[i]; }
+        }
+        remove(img);
+    } else {
+        fprintf(stderr, "> bench: cannot create synthetic tree\n");
+    }
+
+    double wtime[5] = { 0 };
+    int wnum[5], wenv = 0, best_w = 0;
+    uint64_t total = 256ull << 20;
+    for (int n = 0; n <= 4 && !g_bench_stop; n++) {
+        if (n == 1) continue;
+        double t0 = bench_now_ms();
+        int rc = 0;
+        if (n == 0) {
+            char path[4400];
+            snprintf(path, sizeof path, "%s/seq.bin", g_bench_dir);
+            rc = bench_write(path, total);
+            remove(path);
+        } else {
+            pid_t kids[4];
+            for (int i = 0; i < n; i++) {
+                pid_t pid = fork();
+                if (!pid) {
+                    char path[4400];
+                    snprintf(path, sizeof path, "%s/p%d_%d.bin", g_bench_dir, n, i);
+                    _exit(bench_write(path, total / (uint64_t)n) ? 1 : 0);
+                }
+                kids[i] = pid;
+            }
+            for (int i = 0; i < n; i++) {
+                int st = 0;
+                if (kids[i] > 0) { while (waitpid(kids[i], &st, 0) < 0 && errno == EINTR) {} }
+                if (kids[i] <= 0 || !WIFEXITED(st) || WEXITSTATUS(st)) rc = 1;
+                char path[4400];
+                snprintf(path, sizeof path, "%s/p%d_%d.bin", g_bench_dir, n, i);
+                remove(path);
+            }
+        }
+        double dt = bench_now_ms() - t0;
+        if (!rc) {
+            printf("> bench: %s write%s: %.0f ms\n", n == 0 ? "sequential" : "parallel", n == 0 ? "" : " (writers)", dt);
+            if (n > 0) {
+                printf("> bench: writers=%d: %.0f ms\n", n, dt);
+                wnum[wenv] = n; wtime[wenv++] = dt;
+                double best = 1e30;
+                best_w = 0;
+                for (int i = 0; i < wenv; i++) if (wtime[i] < best) { best = wtime[i]; best_w = wnum[i]; }
+            }
+        } else if (!g_bench_stop) {
+            fprintf(stderr, "> bench: write test failed\n");
+        }
+    }
+
+    char ts[64];
+    time_t now = time(NULL);
+    struct tm tmv;
+    localtime_r(&now, &tmv);
+    strftime(ts, sizeof ts, "%Y-%m-%dT%H:%M:%S", &tmv);
+    int temp = p->temp_battery_c;
+    if (p->temp_skin_c > temp) temp = p->temp_skin_c;
+    if (p->temp_soc_c > temp) temp = p->temp_soc_c;
+
+    const char *dir = getenv("DNA_DIR");
+    if (!dir || !*dir) dir = tmp_dir();
+    char cache[4600];
+    mkdir_p(dir);
+    snprintf(cache, sizeof cache, "%s/.dna-perf-bench.json", dir);
+    FILE *j = fopen(cache, "w");
+    if (j) {
+        char esc[128];
+        bench_json_escape(ts, esc, sizeof esc);
+        fprintf(j, "{\n\"timestamp\":\"%s\",\n\"temp_c\":%d,\n\"best_erofs_workers\":%d,\n\"best_parallel_writers\":%d,\n",
+                esc, temp, best_e, best_w);
+        fprintf(j, "\"erofs_workers_tested\":[");
+        for (int i = 0; i < env; i++) fprintf(j, "%s%d", i ? "," : "", workers[i]);
+        fprintf(j, "],\n\"erofs_times_ms\":[");
+        for (int i = 0; i < env; i++) fprintf(j, "%s%.0f", i ? "," : "", etime[i]);
+        fprintf(j, "],\n\"write_workers_tested\":[");
+        for (int i = 0; i < wenv; i++) fprintf(j, "%s%d", i ? "," : "", wnum[i]);
+        fprintf(j, "],\n\"write_times_ms\":[");
+        for (int i = 0; i < wenv; i++) fprintf(j, "%s%.0f", i ? "," : "", wtime[i]);
+        fprintf(j, "]\n}\n");
+        fclose(j);
+        printf("> bench: saved %s\n", cache);
+    }
+    printf("> bench: best erofs workers=%d, parallel writers=%d\n", best_e, best_w);
+
+    sigaction(SIGINT, &old_int, NULL);
+    sigaction(SIGTERM, &old_term, NULL);
+    bench_cleanup();
+    return g_bench_stop ? 130 : 0;
+}
+
+static int bench_read_last(const char *dir, char *ts, size_t tn, int *erofs, int *writers) {
+    char path[4600];
+    snprintf(path, sizeof path, "%s/.dna-perf-bench.json", dir);
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+    char buf[8192];
+    size_t n = fread(buf, 1, sizeof buf - 1, f);
+    fclose(f);
+    buf[n] = 0;
+    const char *t = strstr(buf, "\"timestamp\":\"");
+    if (!t) return 0;
+    t += strlen("\"timestamp\":\"");
+    size_t k = 0;
+    while (t[k] && t[k] != '"' && k + 1 < tn) { ts[k] = t[k]; k++; }
+    ts[k] = 0;
+    const char *e = strstr(buf, "\"best_erofs_workers\":");
+    const char *w = strstr(buf, "\"best_parallel_writers\":");
+    if (!e || !w) return 0;
+    *erofs = atoi(e + strlen("\"best_erofs_workers\":"));
+    *writers = atoi(w + strlen("\"best_parallel_writers\":"));
+    return 1;
+}
+
 static int cmd_perf(int argc, char **argv) {
-    int shell = 0, json = 0;
+    int shell = 0, json = 0, bench = 0;
     for (int i = 0; i < argc; i++) {
         if (!strcmp(argv[i], "--shell")) shell = 1;
         else if (!strcmp(argv[i], "--json")) json = 1;
-        else { fprintf(stderr, "usage: dna perf [--shell|--json]\n"); return 2; }
+        else if (!strcmp(argv[i], "--bench")) bench = 1;
+        else { fprintf(stderr, "usage: dna perf [--shell|--json|--bench]\n"); return 2; }
     }
     perf_t p; perf_ovr_t ov; perf_load_t ld = { 0, 8, 0, 0, 0 };
     perf_detect(&p);
@@ -4367,6 +4634,13 @@ static int cmd_perf(int argc, char **argv) {
     printf("> Plan: part_jobs=%d, erofs_workers=%d, brotli_jobs=%d, nice=%d\n",
            p.part_jobs, p.erofs_workers, p.brotli_jobs, p.nice_level);
 
+    const char *cache_dir = getenv("DNA_DIR");
+    if (!cache_dir || !*cache_dir) cache_dir = tmp_dir();
+    char last_ts[64];
+    int last_e = 0, last_w = 0;
+    if (!bench && bench_read_last(cache_dir, last_ts, sizeof last_ts, &last_e, &last_w))
+        printf("> Last bench: %s, best erofs workers=%d, parallel writers=%d\n", last_ts, last_e, last_w);
+
     const char *dbg = getenv("DNA_PERF_DEBUG");
     if (dbg && *dbg && strcmp(dbg, "0")) {
         printf("> perf: RAM total=%llu MiB avail=%llu MiB swap=%llu/%llu MiB\n",
@@ -4381,6 +4655,7 @@ static int cmd_perf(int argc, char **argv) {
                (unsigned long long)(p.free_tmp_bytes >> 20),
                (unsigned long long)(p.free_pro_bytes >> 20), p.reserve_mb);
     }
+    if (bench) return perf_bench(&p);
     return 0;
 }
 
