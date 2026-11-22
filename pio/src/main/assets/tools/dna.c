@@ -1326,7 +1326,7 @@ static int read_opt(const char *path, const char *key, char *out, size_t n) {
 }
 
 typedef struct {
-    int rw, autosize, sparse, out_kind, brlvl, erofslvl, shrink, delavb, hal_fallback;
+    int rw, autosize, sparse, out_kind, brlvl, erofslvl, shrink, delavb, hal_fallback, nofsck;
     char mode[16];
     int erofs_workers;
 } ropts_t;
@@ -1492,7 +1492,8 @@ static int repack_ext4(const char *name, const char *dro, const char *pro, const
     if (rc) { fprintf(stderr, "> Error: e2fsdroid failed\n"); remove(raw); return 1; }
     if (o->shrink) {
         VPRINTF("> Shrinking free space\n"); fflush(stdout);
-        char *ck[] = { "e2fsck", "-fy", raw, NULL }; run(ck);
+        if (!o->nofsck) { char *ck[] = { "e2fsck", "-fy", raw, NULL }; run(ck); }
+        else VPRINTF("> Skipping e2fsck (--no-fsck)\n");
         char *rs[] = { "resize2fs", "-f", "-M", raw, NULL };
         if (run(rs)) VWARN("> Warning: shrink failed, keeping full size\n");
     }
@@ -2888,9 +2889,9 @@ static int tasks_cancel(build_task_t *t, int nt, const char *pro) {
 }
 
 /* dna repack <dirs,...> --read 1|0 --auto 1|0 --format 0|1 --type 0|1|2 --br N --erofs N --mode lz4hc|lz4|lzma
- *            --compress 0|1 --delavb 0|1 --hal-fallback 0|1 --convert 0|1|2   (convert: 0 ext4, 1 erofs, 2 f2fs) */
+ *            --compress 0|1 --delavb 0|1 --hal-fallback 0|1 --no-fsck 0|1 --convert 0|1|2   (convert: 0 ext4, 1 erofs, 2 f2fs) */
 static int cmd_repack_impl(int argc, char **argv) {
-    ropts_t o = { 1, 1, 0, 0, 0, 0, 0, 0, 0, "lz4hc", 0 }; int conv = 0;
+    ropts_t o = { 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, "lz4hc", 0 }; int conv = 0;
     char *names[128]; int nn = 0;
     perf_ovr_t ov; perf_ovr_from_env(&ov);
     for (int i = 0; i < argc; i++) {
@@ -2905,6 +2906,7 @@ static int cmd_repack_impl(int argc, char **argv) {
         else if (!strcmp(a, "--compress")) o.shrink = flag_val(argc, argv, &i);
         else if (!strcmp(a, "--delavb")) o.delavb = flag_val(argc, argv, &i);
         else if (!strcmp(a, "--hal-fallback")) o.hal_fallback = flag_val(argc, argv, &i);
+        else if (!strcmp(a, "--no-fsck")) o.nofsck = flag_val(argc, argv, &i);
         else if (!strcmp(a, "--convert") && hasv) conv = atoi(argv[++i]);
         else if (!strcmp(a, "--profile") && hasv) {
             const char *v = argv[++i];
