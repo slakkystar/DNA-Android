@@ -26,8 +26,8 @@ android {
         resConfigs "zh"
         minSdkVersion 21
         targetSdkVersion 28
-        versionCode 202111143
-        versionName "2.9.0-EN"
+        versionCode 202611220
+        versionName "3.0.0"
     }
     buildTypes {
         release {
