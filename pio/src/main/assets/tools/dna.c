@@ -6,6 +6,7 @@
  */
 #define _FILE_OFFSET_BITS 64
 #include <stdint.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -442,9 +443,9 @@ static int wait_child_stoppable(pid_t p, int *st) {
             return -1;
         }
         if (!g_stop) continue;
+        kill(-p, SIGTERM);
+        kill(p, SIGTERM);
         if (!sent) {
-            kill(-p, SIGTERM);
-            kill(p, SIGTERM);
             clock_gettime(CLOCK_MONOTONIC, &t0);
             sent = 1;
         }
@@ -462,6 +463,7 @@ static int wait_child_stoppable(pid_t p, int *st) {
 }
 
 static int run(char *const argv[]) {
+    if (g_stop) return -1;
     pid_t p = fork();
     if (p < 0) return -1;
     if (p == 0) {
@@ -490,6 +492,7 @@ static int run(char *const argv[]) {
 /* Same as run(), but hides the tool's stdout (progress/banner). stderr stays visible.
  * In debug mode nothing is hidden; in normal repacking both streams are hidden. */
 static int run_quiet(char *const argv[]) {
+    if (g_stop) return -1;
     pid_t p = fork();
     if (p < 0) return -1;
     if (p == 0) {
@@ -516,6 +519,7 @@ static int run_quiet(char *const argv[]) {
 }
 
 static pid_t spawn_filter(char *const argv[], int in_fd, int out_fd, int hide_err) {
+    if (g_stop) return -1;
     pid_t p = fork();
     if (p < 0) return -1;
     if (p == 0) {
@@ -1568,6 +1572,7 @@ static int repack_ext4(const char *name, const char *dro, const char *pro, const
     char uuid[64] = ""; read_opt(fso, "uuid", uuid, sizeof uuid);
     int rc = 1, grew = 0;
     for (int attempt = 0; attempt < 8; attempt++) {
+        if (g_stop) { remove(raw); return 1; }
         VPRINTF("> Building <ext4> (%s): %s, %llu blocks (%llu MiB)\n", o->rw ? "RW" : "RO", name,
                (unsigned long long)blocks, (unsigned long long)(blocks * 4 / 1024)); fflush(stdout);
         run_note("T", raw);
@@ -1596,6 +1601,7 @@ static int repack_ext4(const char *name, const char *dro, const char *pro, const
         fd[k++] = "-f"; fd[k++] = tree; fd[k++] = raw; fd[k] = NULL;
         rc = run(fd);
         if (!rc) break;
+        if (g_stop) { remove(raw); return 1; }
         if (!o->autosize) { fprintf(stderr, "> Error: content does not fit into the original size, use Auto size\n"); remove(raw); return 1; }
         blocks = !grew ? blocks * 125 / 100 + 512 : blocks * 112 / 100 + 512;
         grew = 1;
@@ -2922,9 +2928,8 @@ static int perf_wait_gate(perf_t *p, int active_tasks) {
         double elapsed = (double)(t1.tv_sec - t0.tv_sec) + (double)(t1.tv_nsec - t0.tv_nsec) / 1e9;
         if (elapsed >= limit) {
             if (active_tasks > 0) return 2;
-            if (hot) fprintf(stderr, "> Error: device is too hot to continue\n");
-            else fprintf(stderr, "> Error: not enough memory to start packing\n");
-            return 1;
+            fprintf(stderr, "> Warning: continuing although %s\n", hot ? "the device is still hot" : "free memory is low");
+            return 0;
         }
         struct timespec ts = { 1, 0 };
         nanosleep(&ts, NULL);
@@ -2972,12 +2977,11 @@ static int perf_check_space(const char *pro, const char *dro, char *const *names
     if (part_jobs < 1) part_jobs = 1;
     if (part_jobs > n) part_jobs = n;
     uint64_t sum_raw = 0, sum_both = 0;
-    uint64_t factor = o->out_kind == 2 ? 2 : 1;
     for (int i = 0; i < part_jobs; i++) {
         sum_raw += est[i];
-        sum_both += est[i] + est[i] * factor;
+        sum_both += est[i] * ((o->sparse || o->out_kind) ? 2 : 1);
     }
-    const uint64_t margin = 1ULL << 30;
+    const uint64_t margin = 512ULL << 20;
     char out[4400];
     snprintf(out, sizeof out, "%s/out", pro);
     uint64_t have_out = perf_free_bytes(out);
@@ -2992,7 +2996,7 @@ static int perf_check_space(const char *pro, const char *dro, char *const *names
             have_tmp = perf_free_bytes(tmp);
         }
     }
-    uint64_t need_out = sum_both + margin + (separate ? 0 : sum_raw);
+    uint64_t need_out = sum_both + margin;
     if (have_out < need_out) {
         fprintf(stderr, "> Error: not enough free space in %s: need %llu MiB, have %llu MiB\n",
                 out, (unsigned long long)(need_out >> 20), (unsigned long long)(have_out >> 20));
@@ -3212,7 +3216,8 @@ static int run_abort_cleanup(int mode) {
 }
 
 static void stop_handler(int sig) {
-    g_stop = sig == SIGUSR1 ? 2 : 1;
+    if (sig == SIGUSR1) g_stop = 2;
+    else if (g_stop != 2) g_stop = 1;
 }
 
 static void install_stop_handlers(void) {
