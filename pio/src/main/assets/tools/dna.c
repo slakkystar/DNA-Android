@@ -5224,11 +5224,120 @@ static int cmd_perf(int argc, char **argv) {
 }
 
 
+/* ---------- dna stop ---------- */
+
+static void run_root_dir(char *out, size_t n) {
+    const char *tmp = getenv("DNA_TMP");
+    if (!tmp || !*tmp) tmp = getenv("TMPDIR");
+    if (!tmp || !*tmp) tmp = "/data/local/tmp";
+    snprintf(out, n, "%s/.dna-run", tmp);
+}
+
+static int proc_state_start(pid_t pid, char *state, long long *start) {
+    char p[64]; snprintf(p, sizeof p, "/proc/%d/stat", (int)pid);
+    FILE *f = fopen(p, "r");
+    if (!f) return -1;
+    char buf[8192];
+    size_t n = fread(buf, 1, sizeof buf - 1, f); fclose(f); buf[n] = 0;
+    char *rp = strrchr(buf, ')');
+    if (!rp) return -1;
+    char *save = NULL;
+    char *tok = strtok_r(rp + 1, " ", &save);
+    if (!tok) return -1;
+    if (state) *state = tok[0];
+    for (int field = 3; tok && field < 22; field++) tok = strtok_r(NULL, " ", &save);
+    if (start) *start = tok ? strtoll(tok, NULL, 10) : 0;
+    return start && *start ? 0 : -1;
+}
+
+static int proc_identity_ok(pid_t pid) {
+    char p[64], b[8192];
+    snprintf(p, sizeof p, "/proc/%d/cmdline", (int)pid);
+    FILE *f = fopen(p, "rb");
+    if (f) {
+        size_t n = fread(b, 1, sizeof b - 1, f); fclose(f); b[n] = 0;
+        for (size_t i = 0; i < n; i++) if (!b[i]) b[i] = ' ';
+        if (strstr(b, "dna")) return 1;
+    }
+    char self[4096], exe[4096];
+    snprintf(p, sizeof p, "/proc/%d/exe", (int)pid);
+    if (!realpath(p, exe) || !realpath("/proc/self/exe", self)) return 0;
+    return !strcmp(self, exe);
+}
+
+static int proc_is_run(pid_t pid, long long start, int *alive) {
+    if (pid <= 1 || start <= 0) return 0;
+    char state = 0; long long now = 0;
+    if (proc_state_start(pid, &state, &now) || now != start) return 0;
+    if (!proc_identity_ok(pid)) return 0;
+    *alive = state != 'Z' && kill(pid, 0) == 0;
+    return 1;
+}
+
+static int cmd_stop(int argc, char **argv) {
+    (void)argv;
+    if (argc) { fprintf(stderr, "usage: dna stop\n"); return 2; }
+    char root[4400]; run_root_dir(root, sizeof root);
+    DIR *d = opendir(root);
+    if (!d) { printf("> Nothing to stop\n"); return 0; }
+    char paths[256][4600]; int nr = 0;
+    struct dirent *de;
+    while ((de = readdir(d)) && nr < 256) {
+        size_t l = strlen(de->d_name);
+        if (l > 4 && !strcmp(de->d_name + l - 4, ".run")) snprintf(paths[nr++], 4600, "%s/%s", root, de->d_name);
+    }
+    closedir(d);
+    if (!nr) { printf("> Nothing to stop\n"); return 0; }
+    printf("> Force stop: stopping %d run(s)\n", nr); fflush(stdout);
+    int failed = 0;
+    for (int i = 0; i < nr; i++) {
+        long long start = 0, dummy = 0; pid_t pid = 0;
+        FILE *f = fopen(paths[i], "r");
+        char line[8192];
+        if (f) {
+            while (fgets(line, sizeof line, f)) {
+                if (!strncmp(line, "START ", 6)) {
+                    long long t = 0;
+                    if (sscanf(line + 6, "%d %lld", (int *)&pid, &t) == 2) start = t;
+                }
+            }
+            fclose(f);
+        }
+        int alive0 = 0;
+        int known = proc_is_run(pid, start, &alive0);
+        int was_alive = known && alive0;
+        if (was_alive) {
+            kill(pid, SIGUSR1);
+            for (int k = 0; k < 100; k++) {
+                int alive = 0;
+                if (!proc_is_run(pid, start, &alive) || !alive) break;
+                struct timespec ts = { 0, 100000000 };
+                nanosleep(&ts, NULL);
+            }
+            int alive = 0;
+            if (proc_is_run(pid, start, &alive) && alive) {
+                kill(pid, SIGKILL);
+                int st = 0; waitpid(pid, &st, 0);
+                struct timespec ts = { 0, 1000000000 };
+                nanosleep(&ts, NULL);
+            }
+        }
+        (void)dummy;
+        if (!access(paths[i], F_OK)) {
+            int mode = was_alive ? 2 : 1;
+            if (run_cleanup_file(paths[i], mode) != 130) failed = 1;
+        }
+        if (!access(paths[i], F_OK)) failed = 1;
+    }
+    printf("> Force stop complete\n");
+    return failed ? 1 : 0;
+}
+
 /* ---------- dispatcher ---------- */
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "dna %s\nusage: dna <gettype|dumper|extract|lpunpack|lpmake|repack|convert|unzip|perf> ...\n", VERSION);
+        fprintf(stderr, "dna %s\nusage: dna <gettype|dumper|extract|lpunpack|lpmake|repack|convert|unzip|perf|stop> ...\n", VERSION);
         return 2;
     }
     const char *dbg = getenv("DNA_DEBUG");
@@ -5243,6 +5352,7 @@ int main(int argc, char **argv) {
     if (!strcmp(c, "unzip"))    return cmd_unzip(argc - 2, argv + 2);
     if (!strcmp(c, "dumper"))   return cmd_dumper(argc - 2, argv + 2);
     if (!strcmp(c, "perf"))     return cmd_perf(argc - 2, argv + 2);
+    if (!strcmp(c, "stop"))     return cmd_stop(argc - 2, argv + 2);
     fprintf(stderr, "dna: unknown command '%s'\n", c);
     return 2;
 }
