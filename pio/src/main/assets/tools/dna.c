@@ -1780,6 +1780,80 @@ static int fc_exists(const fc_ent_t *e, size_t n, const char *path) {
     return n && bsearch(&key, e, n, sizeof *e, fc_ent_cmp) != NULL;
 }
 
+typedef struct maj_count { char *ctx; int count; struct maj_count *next; } maj_count_t;
+typedef struct maj_parent { char *parent; maj_count_t *head; struct maj_parent *next; } maj_parent_t;
+typedef struct { maj_parent_t **b; size_t nb; } maj_t;
+
+static size_t maj_hash(const char *s) {
+    size_t h = 5381;
+    while (*s) h = ((h << 5) + h) ^ (unsigned char)*s++;
+    return h;
+}
+
+static int maj_init(maj_t *m) {
+    if (m->b) return 0;
+    m->nb = 1024;
+    m->b = calloc(m->nb, sizeof *m->b);
+    if (!m->b) { m->nb = 0; return -1; }
+    return 0;
+}
+
+static void maj_free(maj_t *m) {
+    if (!m->b) return;
+    for (size_t i = 0; i < m->nb; i++) {
+        maj_parent_t *p = m->b[i];
+        while (p) {
+            maj_parent_t *pn = p->next;
+            maj_count_t *c = p->head;
+            while (c) { maj_count_t *cn = c->next; free(c->ctx); free(c); c = cn; }
+            free(p->parent); free(p);
+            p = pn;
+        }
+    }
+    free(m->b); m->b = NULL; m->nb = 0;
+}
+
+static int maj_add(maj_t *m, const char *parent, const char *ctx) {
+    if (maj_init(m)) return -1;
+    size_t h = maj_hash(parent) & (m->nb - 1);
+    maj_parent_t *p;
+    for (p = m->b[h]; p; p = p->next) if (!strcmp(p->parent, parent)) break;
+    if (!p) {
+        p = malloc(sizeof *p);
+        if (!p) return -1;
+        p->parent = strdup(parent);
+        p->head = NULL; p->next = m->b[h];
+        if (!p->parent) { free(p); return -1; }
+        m->b[h] = p;
+    }
+    maj_count_t *c;
+    for (c = p->head; c; c = c->next) if (!strcmp(c->ctx, ctx)) break;
+    if (c) { c->count++; return 0; }
+    c = malloc(sizeof *c);
+    if (!c) return -1;
+    c->ctx = strdup(ctx);
+    if (!c->ctx) { free(c); return -1; }
+    c->count = 1; c->next = p->head; p->head = c;
+    return 0;
+}
+
+static int maj_query(const maj_t *m, const char *parent, char *out, size_t on) {
+    if (!m->b) return 0;
+    size_t h = maj_hash(parent) & (m->nb - 1);
+    for (maj_parent_t *p = m->b[h]; p; p = p->next) {
+        if (strcmp(p->parent, parent)) continue;
+        int best = 0, second = 0;
+        const char *bc = NULL;
+        for (maj_count_t *c = p->head; c; c = c->next) {
+            if (c->count > best) { second = best; best = c->count; bc = c->ctx; }
+            else if (c->count > second) second = c->count;
+        }
+        if (best >= 2 && best > second) { snprintf(out, on, "%s", bc); return 1; }
+        return 0;
+    }
+    return 0;
+}
+
 static int fc_majority(const fc_ent_t *e, size_t n, const char *parent, char *out, size_t on) {
     int best = 0, second = 0;
     const char *bc = NULL;
@@ -2036,7 +2110,20 @@ typedef struct {
     fc_ent_t *ents; size_t nents;
     char **adds; size_t nadd, cap;
     int hal_fallback;
+    maj_t maj; size_t maj_n; int maj_bad;
 } fcx_ctx_t;
+
+static int fc_majority_ctx(fcx_ctx_t *c, const char *parent, char *out, size_t on) {
+    if (c->maj_bad) return fc_majority(c->ents, c->nents, parent, out, on);
+    while (c->maj_n < c->nents) {
+        if (maj_add(&c->maj, c->ents[c->maj_n].parent, c->ents[c->maj_n].ctx)) {
+            c->maj_bad = 1;
+            return fc_majority(c->ents, c->nents, parent, out, on);
+        }
+        c->maj_n++;
+    }
+    return maj_query(&c->maj, parent, out, on);
+}
 
 static void fc_escape(const char *in, char *out, size_t n) {
     size_t j = 0;
@@ -2084,7 +2171,7 @@ static void fc_add_path(fcx_ctx_t *c, const char *rel, const struct stat *st) {
             ctx = fc_default(c->name);
             if (hp == 0) VWARN("> Warning: HAL type for %s not found in .cil, using %s for %s\n", base, ctx, abs);
         }
-    } else if (fc_majority(c->ents, c->nents, parent, tmp, sizeof tmp)) ctx = tmp;
+    } else if (fc_majority_ctx(c, parent, tmp, sizeof tmp)) ctx = tmp;
     else ctx = fc_default(c->name);
     fc_add_line(c, abs, ctx);
 }
@@ -2167,7 +2254,7 @@ static void file_contexts_sync(const char *dro, const char *name, const char *tr
     FILE *out = fopen(tmp, "w");
     if (out) {
         for (size_t i = 0; i < nl; i++) if (keep[i]) fputs(lines[i], out);
-        fcx_ctx_t c = { tree, name, dro, ents, ne, NULL, 0, 0, hal_fallback };
+        fcx_ctx_t c = { tree, name, dro, ents, ne, NULL, 0, 0, hal_fallback, {0}, 0, 0 };
         struct stat st;
         if (!lstat(tree, &st)) fc_add_path(&c, "", &st);
         fc_walk(&c, "", 0);
@@ -2179,6 +2266,7 @@ static void file_contexts_sync(const char *dro, const char *name, const char *tr
         } else remove(tmp);
         for (size_t i = 0; i < c.nadd; i++) free(c.adds[i]);
         free(c.adds);
+        maj_free(&c.maj);
     }
 
     for (size_t i = 0; i < ne; i++) { free(ents[i].path); free(ents[i].ctx); free(ents[i].parent); }
