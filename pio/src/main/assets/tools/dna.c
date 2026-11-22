@@ -35,6 +35,9 @@
 
 #define VERSION "1.0"
 #define EXTRACT_UNSUPPORTED (-2)
+#ifndef O_NOFOLLOW
+#define O_NOFOLLOW 0
+#endif
 
 static int g_debug = 0;
 static int g_repack_quiet = 0;
@@ -347,6 +350,14 @@ static int slot_pick(const char *mode, const char *name, char *out, size_t n) {
     return 1;
 }
 
+static int safe_part_name(const char *name) {
+    if (!name || !*name || !strcmp(name, ".") || !strcmp(name, "..")) return 0;
+    for (const unsigned char *p = (const unsigned char *)name; *p; p++) {
+        if (*p == '/' || *p == '\\' || *p < 0x20 || *p == 0x7f) return 0;
+    }
+    return 1;
+}
+
 static int extract_one(const char *path, int auto_unpack, int delete_src);
 
 static int cmd_lpunpack(int argc, char **argv) {
@@ -369,23 +380,43 @@ static int cmd_lpunpack(int argc, char **argv) {
     if (img_open(&im, file) || lp_load(&im, &lp)) { fprintf(stderr, "> Error: %s is not a valid super image\n", file); img_close(&im); return 1; }
 
     if (list) {
-        for (size_t i = 0; i < lp.np; i++) { char dn[64]; if (lp.p[i].sectors && slot_pick(slot, lp.p[i].name, dn, sizeof dn)) puts(dn); }
-        img_close(&im); return 0;
+        for (size_t i = 0; i < lp.np; i++) {
+            char dn[64];
+            if (!lp.p[i].sectors || !slot_pick(slot, lp.p[i].name, dn, sizeof dn)) continue;
+            if (!safe_part_name(dn)) {
+                fprintf(stderr, "> Error: unsafe partition name in super image (partition %zu)\n", i);
+                free(lp.p); free(lp.e); img_close(&im); return 1;
+            }
+            puts(dn);
+        }
+        free(lp.p); free(lp.e); img_close(&im); return 0;
     }
 
     char dir[4096]; snprintf(dir, sizeof dir, "%s", file);
     char *sl = strrchr(dir, '/'); if (sl) *sl = 0; else strcpy(dir, ".");
 
+    for (size_t i = 0; i < lp.np; i++) {
+        char dn[64];
+        part_t *p = &lp.p[i];
+        if (!p->sectors || !slot_pick(slot, p->name, dn, sizeof dn) || !in_list(parts, dn)) continue;
+        if (!safe_part_name(dn)) {
+            fprintf(stderr, "> Error: unsafe partition name in super image (partition %zu)\n", i);
+            free(lp.p); free(lp.e); img_close(&im); return 1;
+        }
+    }
+
     int rc = 0, done = 0, auto_fail = 0;
     uint8_t *buf = malloc(1 << 20);
+    if (!buf) { fprintf(stderr, "> Error: out of memory\n"); free(lp.p); free(lp.e); img_close(&im); return 1; }
     for (size_t i = 0; i < lp.np; i++) {
         part_t *p = &lp.p[i];
         char dn[64];
         if (!p->sectors || !slot_pick(slot, p->name, dn, sizeof dn) || !in_list(parts, dn)) continue;
         char out[4400]; snprintf(out, sizeof out, "%s/%s.img", dir, dn);
         printf("> Extracting: %s\n", dn); fflush(stdout);
-        FILE *o = fopen(out, "wb");
-        if (!o) { fprintf(stderr, "> Error: cannot write %s\n", out); rc = 1; continue; }
+        int ofd = open(out, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0666);
+        FILE *o = ofd >= 0 ? fdopen(ofd, "wb") : NULL;
+        if (!o) { if (ofd >= 0) close(ofd); fprintf(stderr, "> Error: cannot write %s\n", out); rc = 1; continue; }
         for (uint32_t j = 0; j < p->num_ext && !rc; j++) {
             ext_t *x = &lp.e[p->first_ext + j];
             uint64_t len = x->sectors * 512, off = x->data * 512;
@@ -414,7 +445,7 @@ static int cmd_lpunpack(int argc, char **argv) {
             }
         }
     }
-    free(buf); img_close(&im);
+    free(buf); free(lp.p); free(lp.e); img_close(&im);
     if (!rc && !done) { fprintf(stderr, "> Error: no matching partitions\n"); rc = 1; }
     if (!rc && del) delete_path(file);
     return rc ? rc : auto_fail;
