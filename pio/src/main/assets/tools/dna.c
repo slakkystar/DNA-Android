@@ -39,6 +39,50 @@
 #define O_NOFOLLOW 0
 #endif
 
+static void oom_abort(void) {
+    fprintf(stderr, "> Error: out of memory\n");
+    exit(1);
+}
+
+static void *xmalloc(size_t n) {
+    if (!n) n = 1;
+    void *p = malloc(n);
+    if (!p) oom_abort();
+    return p;
+}
+
+static void *xcalloc(size_t n, size_t size) {
+    if (!n || !size) { n = 1; size = 1; }
+    void *p = calloc(n, size);
+    if (!p) oom_abort();
+    return p;
+}
+
+static void *xrealloc(void *p, size_t n) {
+    if (!n) n = 1;
+    void *q = realloc(p, n);
+    if (!q) oom_abort();
+    return q;
+}
+
+static char *xstrdup(const char *s) {
+    char *p = strdup(s);
+    if (!p) oom_abort();
+    return p;
+}
+
+static char *xstrndup(const char *s, size_t n) {
+    char *p = strndup(s, n);
+    if (!p) oom_abort();
+    return p;
+}
+
+#define malloc(n) xmalloc(n)
+#define calloc(n, size) xcalloc((n), (size))
+#define realloc(p, n) xrealloc((p), (n))
+#define strdup(s) xstrdup(s)
+#define strndup(s, n) xstrndup((s), (n))
+
 static int g_debug = 0;
 static int g_repack_quiet = 0;
 static struct timespec g_part_t0;
@@ -834,15 +878,21 @@ static int extract_ext(const char *img, const char *dro, const char *pname) {
     uint8_t sb[1024];
     if (!img_read(&im, 1024, sb, 1024) || le16(sb + 56) != 0xEF53) { img_close(&im); return -1; }
     efs_t e; memset(&e, 0, sizeof e);
-    e.im = &im; e.bs = 1024u << le32(sb + 24); e.ipg = le32(sb + 40);
+    uint32_t log_bs = le32(sb + 24);
+    if (log_bs > 6) { img_close(&im); return -1; }
+    e.im = &im; e.bs = 1024u << log_bs; e.ipg = le32(sb + 40);
     e.isz = le16(sb + 88) ? le16(sb + 88) : 128;
     uint32_t inc = le32(sb + 96);
     e.dsz = (inc & 0x80) ? le16(sb + 254) : 32; if (e.dsz < 32) e.dsz = 32;
     e.nblocks = le32(sb + 4) | ((inc & 0x80) ? (uint64_t)le32(sb + 0x150) << 32 : 0);
-    uint32_t bpg = le32(sb + 32); e.ngroups = (uint32_t)((e.nblocks + bpg - 1) / bpg);
+    uint32_t bpg = le32(sb + 32);
+    if (!e.bs || !e.ipg || !bpg) { img_close(&im); return -1; }
+    e.ngroups = (uint32_t)((e.nblocks + bpg - 1) / bpg);
     if (inc & 0x10000000) fprintf(stderr, "> Warning: inline_data feature is not supported\n");
-    e.gdt = malloc((size_t)e.ngroups * e.dsz);
-    if (!img_read(&im, (uint64_t)(e.bs == 1024 ? 2 : 1) * e.bs, e.gdt, (size_t)e.ngroups * e.dsz)) { img_close(&im); return -1; }
+    size_t gdt_size = (size_t)e.ngroups * e.dsz;
+    if (e.dsz && gdt_size / e.dsz != e.ngroups) { img_close(&im); return -1; }
+    e.gdt = malloc(gdt_size);
+    if (!img_read(&im, (uint64_t)(e.bs == 1024 ? 2 : 1) * e.bs, e.gdt, gdt_size)) { img_close(&im); return -1; }
     snprintf(e.pname, sizeof e.pname, "%s", pname);
     snprintf(e.outroot, sizeof e.outroot, "%s/%s", dro, pname);
     char cdir[4200], p1[4400], p2[4400], p3[4400];
