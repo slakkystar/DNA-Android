@@ -3,7 +3,7 @@ if [ ! -d "$DNA_PRO/out" ]; then
 fi
 
 if [ -z "$DNA_ZSTD_THREADS" ] && command -v dna >/dev/null 2>&1; then
-    eval "$(dna perf --shell 2>/dev/null)"
+    DNA_ZSTD_THREADS=$(dna perf --shell 2>/dev/null | sed -n 's/^DNA_ZSTD_THREADS=\([0-9][0-9]*\)$/\1/p' | head -n 1)
 fi
 threads=${DNA_ZSTD_THREADS:-}
 case "$threads" in ''|*[!0-9]*) threads=$(nproc 2>/dev/null || echo 1); [ "$threads" -gt 4 ] && threads=4 ;; esac
