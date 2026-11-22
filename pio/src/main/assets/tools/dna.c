@@ -1364,7 +1364,7 @@ static int read_opt(const char *path, const char *key, char *out, size_t n) {
 }
 
 typedef struct {
-    int rw, autosize, sparse, out_kind, brlvl, erofslvl, shrink, delavb, hal_fallback, nofsck;
+    int rw, autosize, sparse, out_kind, brlvl, erofslvl, shrink, delavb, hal_fallback, nofsck, incremental;
     char mode[16];
     int erofs_workers;
 } ropts_t;
@@ -2379,6 +2379,11 @@ static int repack_boot(const char *name, const char *dro, const char *pro) {
     return rc;
 }
 
+static void inc_output_path(const char *pro, const char *name, const ropts_t *o, char *out, size_t n);
+static int inc_fingerprint(const char *tree, const char *dro, const char *name, int conv, const ropts_t *o, char fp[65]);
+static int inc_cache_hit(const char *pro, const char *name, const char *out, const char *fp);
+static void inc_cache_store(const char *pro, const char *name, const char *out, const char *fp);
+
 static int repack_one(const char *name, int conv, ropts_t *o, const char *dro, const char *pro, int is_boot) {
     char tree[4400];
     snprintf(tree, sizeof tree, "%s/%s", dro, name);
@@ -2395,10 +2400,23 @@ static int repack_one(const char *name, int conv, ropts_t *o, const char *dro, c
         if (stale) VPRINTF("> fs_config: %zu stale entries removed\n", stale);
     }
     if (!access(fcx, R_OK)) file_contexts_sync(dro, name, tree, fcx, o->hal_fallback);
+    char outp[4600], fp[65];
+    int have_fp = 0;
+    if (o->incremental) {
+        inc_output_path(pro, name, o, outp, sizeof outp);
+        if (inc_fingerprint(tree, dro, name, conv, o, fp) == 0) {
+            have_fp = 1;
+            if (inc_cache_hit(pro, name, outp, fp)) {
+                printf("> Up to date, skipped: %s\n", name);
+                return 0;
+            }
+        }
+    }
     int rc;
     if (conv == 1) rc = repack_erofs(name, dro, pro, o);
     else if (conv == 2) rc = repack_f2fs(name, dro, pro, o);
     else rc = repack_ext4(name, dro, pro, o);
+    if (!rc && have_fp) inc_cache_store(pro, name, outp, fp);
     return rc ? 1 : 0;
 }
 
@@ -3066,7 +3084,7 @@ static int tasks_cancel(build_task_t *t, int nt, const char *pro) {
 /* dna repack <dirs,...> --read 1|0 --auto 1|0 --format 0|1 --type 0|1|2 --br N --erofs N --mode lz4hc|lz4|lzma
  *            --compress 0|1 --delavb 0|1 --hal-fallback 0|1 --no-fsck 0|1 --convert 0|1|2   (convert: 0 ext4, 1 erofs, 2 f2fs) */
 static int cmd_repack_impl(int argc, char **argv) {
-    ropts_t o = { 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, "lz4hc", 0 }; int conv = 0;
+    ropts_t o = { 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, "lz4hc", 0 }; int conv = 0, inc_set = 0;
     char *names[128]; int nn = 0;
     perf_ovr_t ov; perf_ovr_from_env(&ov);
     for (int i = 0; i < argc; i++) {
@@ -3082,6 +3100,7 @@ static int cmd_repack_impl(int argc, char **argv) {
         else if (!strcmp(a, "--delavb")) o.delavb = flag_val(argc, argv, &i);
         else if (!strcmp(a, "--hal-fallback")) o.hal_fallback = flag_val(argc, argv, &i);
         else if (!strcmp(a, "--no-fsck")) o.nofsck = flag_val(argc, argv, &i);
+        else if (!strcmp(a, "--incremental")) { o.incremental = flag_val(argc, argv, &i); inc_set = 1; }
         else if (!strcmp(a, "--convert") && hasv) conv = atoi(argv[++i]);
         else if (!strcmp(a, "--profile") && hasv) {
             const char *v = argv[++i];
@@ -3100,6 +3119,8 @@ static int cmd_repack_impl(int argc, char **argv) {
         else if (!strcmp(a, "--thermal-limit") && hasv) { int v = atoi(argv[++i]); if (v >= 20 && v <= 120) g_thermal_limit_hot = v; }
         else if (a[0] != '-') for (char *t = strtok(argv[i], ", \t\n"); t && nn < 128; t = strtok(NULL, ", \t\n")) names[nn++] = t;
     }
+    const char *iv = getenv("DNA_INCREMENTAL");
+    if (!inc_set && iv && *iv && strcmp(iv, "0")) o.incremental = 1;
     const char *dro = getenv("DNA_DRO"), *pro = getenv("DNA_PRO");
     if (!dro || !*dro || !pro || !*pro) { fprintf(stderr, "> Error: project is not selected\n"); return 1; }
     if (!nn) { fprintf(stderr, "usage: dna repack <dir[,dir]> [--read 0|1] [--auto 0|1] [--format 0|1] [--type 0|1|2] [--br N] [--erofs N] [--mode lz4hc|lz4|lzma] [--compress 0|1] [--delavb 0|1] [--hal-fallback 0|1] [--convert 0|1|2] [--profile auto|saver|balanced|fast|turbo] [--jobs N] [--erofs-workers N] [--brotli-jobs N] [--nice N] [--mem-reserve-mb N] [--thermal-limit C]\n"); return 2; }
@@ -3306,17 +3327,249 @@ static void sha_block(sha_t *c, const uint8_t *p) {
     c->h[0] += a; c->h[1] += b; c->h[2] += cc; c->h[3] += d; c->h[4] += e; c->h[5] += f; c->h[6] += g; c->h[7] += h;
 }
 
-static void sha256(const void *data, size_t len, uint8_t out[32]) {
-    sha_t c = {{0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19}, len, {0}};
-    const uint8_t *p = data; size_t rest = len;
-    while (rest >= 64) { sha_block(&c, p); p += 64; rest -= 64; }
-    memset(c.buf, 0, 64); memcpy(c.buf, p, rest); c.buf[rest] = 0x80;
-    if (rest >= 56) { sha_block(&c, c.buf); memset(c.buf, 0, 64); }
-    uint64_t bits = (uint64_t)len * 8;
-    for (int i = 0; i < 8; i++) c.buf[56 + i] = (uint8_t)(bits >> (56 - 8 * i));
-    sha_block(&c, c.buf);
-    for (int i = 0; i < 8; i++) { out[i*4] = c.h[i] >> 24; out[i*4+1] = c.h[i] >> 16; out[i*4+2] = c.h[i] >> 8; out[i*4+3] = (uint8_t)c.h[i]; }
+static void sha_init(sha_t *c) {
+    static const uint32_t iv[8] = {0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19};
+    memcpy(c->h, iv, sizeof iv);
+    c->len = 0;
+    memset(c->buf, 0, 64);
 }
+
+static void sha_update(sha_t *c, const void *data, size_t len) {
+    const uint8_t *p = data;
+    size_t used = (size_t)(c->len & 63);
+    c->len += len;
+    if (used) {
+        size_t take = 64 - used;
+        if (take > len) take = len;
+        memcpy(c->buf + used, p, take);
+        used += take; p += take; len -= take;
+        if (used == 64) { sha_block(c, c->buf); used = 0; }
+    }
+    while (len >= 64) { sha_block(c, p); p += 64; len -= 64; }
+    if (len) memcpy(c->buf + used, p, len);
+}
+
+static void sha_final(sha_t *c, uint8_t out[32]) {
+    uint64_t bits = c->len * 8;
+    size_t used = (size_t)(c->len & 63);
+    c->buf[used++] = 0x80;
+    if (used > 56) { memset(c->buf + used, 0, 64 - used); sha_block(c, c->buf); used = 0; }
+    memset(c->buf + used, 0, 56 - used);
+    for (int i = 0; i < 8; i++) c->buf[56 + i] = (uint8_t)(bits >> (56 - 8 * i));
+    sha_block(c, c->buf);
+    for (int i = 0; i < 8; i++) {
+        out[i*4] = (uint8_t)(c->h[i] >> 24); out[i*4+1] = (uint8_t)(c->h[i] >> 16);
+        out[i*4+2] = (uint8_t)(c->h[i] >> 8); out[i*4+3] = (uint8_t)c->h[i];
+    }
+}
+
+static void sha256(const void *data, size_t len, uint8_t out[32]) {
+    sha_t c;
+    sha_init(&c);
+    sha_update(&c, data, len);
+    sha_final(&c, out);
+}
+
+typedef struct { char **v; size_t n, cap; } inc_paths_t;
+
+static void inc_paths_add(inc_paths_t *p, const char *s) {
+    if (p->n == p->cap) {
+        size_t nc = p->cap ? p->cap * 2 : 256;
+        char **nv = realloc(p->v, nc * sizeof *nv);
+        if (!nv) return;
+        p->v = nv; p->cap = nc;
+    }
+    p->v[p->n] = strdup(s);
+    if (p->v[p->n]) p->n++;
+}
+
+static void inc_collect(const char *tree, const char *rel, int depth, inc_paths_t *p) {
+    if (depth > 64) return;
+    inc_paths_add(p, rel);
+    char dir[8192];
+    snprintf(dir, sizeof dir, "%s/%s", tree, rel);
+    DIR *d = opendir(dir);
+    if (!d) return;
+    struct dirent *de;
+    while ((de = readdir(d))) {
+        if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
+        char child[8192];
+        snprintf(child, sizeof child, "%s%s%s", rel, *rel ? "/" : "", de->d_name);
+        char full[8192];
+        snprintf(full, sizeof full, "%s/%s", tree, child);
+        struct stat st;
+        if (lstat(full, &st)) continue;
+        inc_paths_add(p, child);
+        if (S_ISDIR(st.st_mode)) inc_collect(tree, child, depth + 1, p);
+    }
+    closedir(d);
+}
+
+static void inc_hash_str(sha_t *c, const char *s, size_t n) {
+    uint64_t z = n;
+    sha_update(c, &z, sizeof z);
+    sha_update(c, s, n);
+}
+
+static void inc_hash_file(sha_t *c, const char *path) {
+    FILE *f = fopen(path, "rb");
+    uint8_t present = f ? 1 : 0;
+    sha_update(c, &present, 1);
+    if (!f) return;
+    uint8_t buf[65536];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof buf, f)) > 0) sha_update(c, buf, n);
+    fclose(f);
+}
+
+static int inc_find_tool(const char *name, char *out, size_t on) {
+    const char *path = getenv("PATH");
+    if (!path) return 0;
+    char tmp[8192];
+    snprintf(tmp, sizeof tmp, "%s", path);
+    for (char *p = strtok(tmp, ":"); p; p = strtok(NULL, ":")) {
+        snprintf(out, on, "%s/%s", p, name);
+        if (!access(out, X_OK)) return 1;
+    }
+    return 0;
+}
+
+static void inc_hash_tool(sha_t *c, const char *name) {
+    uint8_t exists = 0;
+    char path[4400];
+    uint64_t sz = 0;
+    int64_t mt = 0;
+    if (inc_find_tool(name, path, sizeof path)) {
+        struct stat st;
+        if (!stat(path, &st)) { exists = 1; sz = (uint64_t)st.st_size; mt = (int64_t)st.st_mtime; }
+    }
+    inc_hash_str(c, name, strlen(name));
+    sha_update(c, &exists, 1);
+    sha_update(c, &sz, sizeof sz);
+    sha_update(c, &mt, sizeof mt);
+}
+
+static void inc_output_path(const char *pro, const char *name, const ropts_t *o, char *out, size_t n) {
+    const char *ext = o->out_kind == 2 ? ".new.dat.br" : o->out_kind == 1 ? ".new.dat" : ".img";
+    snprintf(out, n, "%s/out/%s%s", pro, name, ext);
+}
+
+static int inc_fingerprint(const char *tree, const char *dro, const char *name, int conv, const ropts_t *o, char fp[65]) {
+    inc_paths_t ps = { NULL, 0, 0 };
+    inc_collect(tree, "", 0, &ps);
+    if (!ps.v) return -1;
+    qsort(ps.v, ps.n, sizeof *ps.v, (int (*)(const void *, const void *))strcmp);
+
+    sha_t c;
+    sha_init(&c);
+    inc_hash_str(&c, VERSION, strlen(VERSION));
+    uint64_t u;
+    u = (uint64_t)conv; sha_update(&c, &u, sizeof u);
+    u = (uint64_t)o->rw; sha_update(&c, &u, sizeof u);
+    u = (uint64_t)o->autosize; sha_update(&c, &u, sizeof u);
+    u = (uint64_t)o->sparse; sha_update(&c, &u, sizeof u);
+    u = (uint64_t)o->out_kind; sha_update(&c, &u, sizeof u);
+    u = (uint64_t)o->brlvl; sha_update(&c, &u, sizeof u);
+    u = (uint64_t)o->erofslvl; sha_update(&c, &u, sizeof u);
+    u = (uint64_t)o->shrink; sha_update(&c, &u, sizeof u);
+    u = (uint64_t)o->delavb; sha_update(&c, &u, sizeof u);
+    u = (uint64_t)o->hal_fallback; sha_update(&c, &u, sizeof u);
+    u = (uint64_t)o->nofsck; sha_update(&c, &u, sizeof u);
+    inc_hash_str(&c, o->mode, strlen(o->mode));
+
+    for (size_t i = 0; i < ps.n; i++) {
+        const char *rel = ps.v[i];
+        char full[8192];
+        snprintf(full, sizeof full, "%s/%s", tree, rel);
+        struct stat st;
+        if (lstat(full, &st)) continue;
+        inc_hash_str(&c, rel, strlen(rel));
+        char ty = S_ISDIR(st.st_mode) ? 'd' : S_ISLNK(st.st_mode) ? 'l' : S_ISREG(st.st_mode) ? 'f' : 'o';
+        sha_update(&c, &ty, 1);
+        u = (uint64_t)st.st_size; sha_update(&c, &u, sizeof u);
+        u = (uint64_t)st.st_mtime; sha_update(&c, &u, sizeof u);
+        int64_t ns = (int64_t)st.st_mtim.tv_nsec; sha_update(&c, &ns, sizeof ns);
+        u = (uint64_t)st.st_mode; sha_update(&c, &u, sizeof u);
+        u = (uint64_t)st.st_uid; sha_update(&c, &u, sizeof u);
+        u = (uint64_t)st.st_gid; sha_update(&c, &u, sizeof u);
+        if (S_ISLNK(st.st_mode)) {
+            char tgt[8192];
+            ssize_t r = readlink(full, tgt, sizeof tgt - 1);
+            if (r < 0) r = 0;
+            inc_hash_str(&c, tgt, (size_t)r);
+        }
+    }
+
+    char cfg[4600];
+    snprintf(cfg, sizeof cfg, "%s/config/%s_fs_config", dro, name); inc_hash_file(&c, cfg);
+    snprintf(cfg, sizeof cfg, "%s/config/%s_file_contexts", dro, name); inc_hash_file(&c, cfg);
+    snprintf(cfg, sizeof cfg, "%s/config/%s_fs_options", dro, name); inc_hash_file(&c, cfg);
+
+    if (conv == 1) inc_hash_tool(&c, "mkfs.erofs");
+    else if (conv == 2) { inc_hash_tool(&c, "mkfs.f2fs"); inc_hash_tool(&c, "sload_f2fs"); }
+    else { inc_hash_tool(&c, "mke2fs"); inc_hash_tool(&c, "e2fsdroid"); inc_hash_tool(&c, "resize2fs"); }
+    if (o->out_kind == 2) inc_hash_tool(&c, "brotli");
+
+    uint8_t out[32];
+    sha_final(&c, out);
+    static const char hex[] = "0123456789abcdef";
+    for (int i = 0; i < 32; i++) { fp[i*2] = hex[out[i] >> 4]; fp[i*2+1] = hex[out[i] & 15]; }
+    fp[64] = 0;
+
+    for (size_t i = 0; i < ps.n; i++) free(ps.v[i]);
+    free(ps.v);
+    return 0;
+}
+
+static int inc_cache_hit(const char *pro, const char *name, const char *out, const char *fp) {
+    char path[4600];
+    snprintf(path, sizeof path, "%s/out/.dna-cache/%s.json", pro, name);
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+    char buf[8192];
+    size_t n = fread(buf, 1, sizeof buf - 1, f);
+    fclose(f);
+    buf[n] = 0;
+    const char *p = strstr(buf, "\"fp\":");
+    if (!p) return 0;
+    p = strchr(p, ':'); if (!p) return 0; p++;
+    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+    if (*p++ != '"') return 0;
+    const char *q = strchr(p, '"'); if (!q || q - p != 64 || strncmp(p, fp, 64)) return 0;
+    const char *on = strstr(buf, "\"out\":");
+    if (!on) return 0;
+    on = strchr(on, ':'); if (!on) return 0; on++;
+    while (*on == ' ' || *on == '\t' || *on == '\n' || *on == '\r') on++;
+    if (*on++ != '"') return 0;
+    const char *oe = strchr(on, '"'); if (!oe) return 0;
+    const char *base = strrchr(out, '/'); base = base ? base + 1 : out;
+    if ((size_t)(oe - on) != strlen(base) || strncmp(on, base, (size_t)(oe - on))) return 0;
+    const char *sz = strstr(buf, "\"out_size\":");
+    const char *mt = strstr(buf, "\"out_mtime\":");
+    if (!sz || !mt) return 0;
+    unsigned long long csz = strtoull(sz + strlen("\"out_size\":"), NULL, 10);
+    long long cmt = strtoll(mt + strlen("\"out_mtime\":"), NULL, 10);
+    struct stat st;
+    if (stat(out, &st) || !S_ISREG(st.st_mode)) return 0;
+    return (unsigned long long)st.st_size == csz && (long long)st.st_mtime == cmt;
+}
+
+static void inc_cache_store(const char *pro, const char *name, const char *out, const char *fp) {
+    struct stat st;
+    if (stat(out, &st) || !S_ISREG(st.st_mode)) return;
+    char dir[4600], path[4600], tmp[4700];
+    snprintf(dir, sizeof dir, "%s/out/.dna-cache", pro);
+    if (mkdir_p(dir)) return;
+    snprintf(path, sizeof path, "%s/%s.json", dir, name);
+    snprintf(tmp, sizeof tmp, "%s.tmp.%d", path, (int)getpid());
+    FILE *f = fopen(tmp, "w");
+    if (!f) return;
+    const char *base = strrchr(out, '/'); base = base ? base + 1 : out;
+    fprintf(f, "{\n\"fp\":\"%s\",\n\"out\":\"%s\",\n\"out_size\":%llu,\n\"out_mtime\":%lld\n}\n",
+            fp, base, (unsigned long long)st.st_size, (long long)st.st_mtime);
+    if (fclose(f) || rename(tmp, path)) remove(tmp);
+}
+
 
 /* ---------- output sink: raw (holes) or sparse, written strictly in order ---------- */
 

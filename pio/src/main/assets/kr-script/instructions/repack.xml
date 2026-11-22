@@ -102,6 +102,11 @@
     </text>
 
     <text>
+        <slice size="20" bold="true" break="true">Incremental packing</slice>
+        <slice break="true">When enabled, each partition is fingerprinted from its files, configuration and build options before packing. If the output already matches the previous build, packing is skipped with an "Up to date" message; any change (files, compression options or tools) triggers a normal rebuild. Disabled by default and not available for boot partitions.</slice>
+    </text>
+
+    <text>
         <slice size="20" bold="true" break="true">Packing super.img</slice>
         <slice break="true">A separate packing of the dynamic super partition, which combines logical partitions (system, vendor, product, etc.)</slice>
     </text>
