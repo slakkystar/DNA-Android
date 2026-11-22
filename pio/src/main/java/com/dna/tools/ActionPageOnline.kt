@@ -152,7 +152,73 @@ class ActionPageOnline : AppCompatActivity() {
         }
     }
 
-    private fun initWebview(url: String?) {
+    private var bridgeEnabled = false
+
+    private fun isTrustedAssetUrl(target: String?): Boolean {
+        if (target.isNullOrBlank()) return false
+        return try {
+            val uri = Uri.parse(target)
+            if (uri.scheme?.toLowerCase(Locale.ROOT) != "file") return false
+            if (!uri.host.isNullOrEmpty()) return false
+            val encodedPath = uri.encodedPath ?: return false
+            if (encodedPath.contains("%2e", true)) return false
+            val path = uri.path ?: return false
+            if (!path.startsWith("/android_asset/")) return false
+            path.split('/').none { it == "." || it == ".." }
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun openExternally(uri: Uri): Boolean {
+        val scheme = uri.scheme?.toLowerCase(Locale.ROOT) ?: return false
+        if (scheme != "http" && scheme != "https" && scheme != "mailto" && scheme != "tel") return false
+        return try {
+            startActivity(Intent(Intent.ACTION_VIEW, uri))
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun handleNavigation(target: String?): Boolean {
+        val uri = try {
+            target?.let { Uri.parse(it) }
+        } catch (e: Exception) {
+            null
+        } ?: return true
+        val scheme = uri.scheme?.toLowerCase(Locale.ROOT) ?: return true
+        if (scheme == "about" && uri.toString() == "about:blank") return false
+        if (bridgeEnabled) {
+            if (isTrustedAssetUrl(target)) return false
+            openExternally(uri)
+            return true
+        }
+        if (scheme == "http" || scheme == "https") return false
+        if (scheme == "file" || scheme == "javascript" || scheme == "data") return true
+        openExternally(uri)
+        return true
+    }
+
+    private fun initWebview(rawUrl: String?) {
+        val url = rawUrl?.trim()
+        if (url.isNullOrEmpty()) {
+            finish()
+            return
+        }
+        val scheme = try {
+            Uri.parse(url).scheme?.toLowerCase(Locale.ROOT)
+        } catch (e: Exception) {
+            null
+        }
+        val trusted = isTrustedAssetUrl(url)
+        if (!trusted && scheme != "https") {
+            Toast.makeText(this, "Unsupported URL", Toast.LENGTH_LONG).show()
+            finish()
+            return
+        }
+        bridgeEnabled = trusted
+
         kr_online_webview.visibility = View.VISIBLE
         kr_online_webview.webChromeClient = object : WebChromeClient() {
             override fun onJsAlert(view: WebView?, url: String?, message: String?, result: JsResult?): Boolean {
@@ -194,34 +260,32 @@ class ActionPageOnline : AppCompatActivity() {
             }
 
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                if (bridgeEnabled && !isTrustedAssetUrl(url)) {
+                    view?.removeJavascriptInterface("KrScriptCore")
+                    bridgeEnabled = false
+                }
                 super.onPageStarted(view, url, favicon)
                 progressBarDialog.showDialog(getString(R.string.please_wait))
             }
 
+            @Suppress("DEPRECATION")
+            override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
+                return handleNavigation(url)
+            }
+
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-                try {
-                    val requestUrl = request?.url
-                    if (requestUrl != null && requestUrl.scheme?.startsWith("http") != true) {
-                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(requestUrl.toString()));
-                        startActivity(intent);
-                        return true;
-                    } else {
-                        return super.shouldOverrideUrlLoading(view, request);
-                    }
-                } catch (e: Exception) {
-                    return super.shouldOverrideUrlLoading(view, request);
-                }
+                return handleNavigation(request?.url?.toString())
             }
         }
-
-        kr_online_webview.loadUrl(url)
 
         WebViewInjector(kr_online_webview,
                 object : ParamsFileChooserRender.FileChooserInterface {
                     override fun openFileChooser(fileSelectedInterface: ParamsFileChooserRender.FileSelectedInterface): Boolean {
                         return chooseFilePath(fileSelectedInterface)
                     }
-                }).inject(this, url?.startsWith("file:///android_asset") == true)
+                }).inject(this, trusted)
+
+        kr_online_webview.loadUrl(url)
     }
 
     private var fileSelectedInterface: ParamsFileChooserRender.FileSelectedInterface? = null

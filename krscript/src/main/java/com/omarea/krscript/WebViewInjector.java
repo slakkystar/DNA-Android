@@ -60,13 +60,19 @@ public class WebViewInjector {
             webSettings.setAllowFileAccess(credible);
             webSettings.setAllowUniversalAccessFromFileURLs(credible);
             webSettings.setAllowFileAccessFromFileURLs(credible);
-            webSettings.setAllowContentAccess(true);
+            webSettings.setAllowContentAccess(credible);
             webSettings.setUseWideViewPort(true);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                webSettings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+            }
 
-            webView.addJavascriptInterface(
-                    new KrScriptEngine(context),
-                    "KrScriptCore" // 由于类名会被混淆，写死吧... KrScriptEngine.class.getSimpleName()
-            );
+            webView.removeJavascriptInterface("KrScriptCore");
+            if (credible) {
+                webView.addJavascriptInterface(
+                        new KrScriptEngine(context),
+                        "KrScriptCore" // 由于类名会被混淆，写死吧... KrScriptEngine.class.getSimpleName()
+                );
+            }
             webView.setDownloadListener(new DownloadListener() {
                 @Override
                 public void onDownloadStart(final String url, String userAgent, final String contentDisposition, final String mimetype, long contentLength) {
