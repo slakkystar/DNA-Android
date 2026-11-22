@@ -62,20 +62,20 @@ else
         echo "- Flashing partition $e"
         dd if="$Brush_in" of="$IMG"
         if [[ $CQ = 1 ]]; then
-         echo "Rebooting to Recovery, countdown…"
+         echo "Rebooting system, countdown…"
          for i in $(seq 4 -1 1); do
             echo $i
             sleep 1
          done
-         reboot recovery
+         reboot
          fi
          if [[ $CQ1 = 1 ]]; then
-          echo "Rebooting system, countdown…"
+          echo "Rebooting to Recovery, countdown…"
           for i in $(seq 4 -1 1); do
             echo $i
             sleep 1
           done
-          reboot
+          reboot recovery
          fi
     else
         echo "！File to flash $Brush_in not found, cannot write to partition $e"

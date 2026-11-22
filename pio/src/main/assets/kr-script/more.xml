@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="UTF-8" ?>
+<root>
 <group title="Partition Management">
     <action>
         <title>Extract img file from system</title>
@@ -12,9 +13,10 @@
         <param name="CQ" label="Automatically reboot device after flashing is complete" type="checkbox" />
         <param name="CQ1" label="Automatically reboot to Recovery after flashing is complete" type="checkbox" />
         <param name="IMG" title="Warning: do not flash partitions such as system" options-sh="samples/image.sh name" required="true"/>
-        <param name="Brush_in" type="file" suffix="img" editable="true" required="true" title="You can enter the absolute path to the img file or use file selection" desc="Tip: you can use [MT Manager] — long press on a folder or file --> Properties --> tap on the directory to copy the absolute path of the folder, or long press on the name to copy the absolute path of the file." required="true"/>
+        <param name="Brush_in" type="file" suffix="img" editable="true" required="true" title="You can enter the absolute path to the img file or use file selection" desc="Tip: you can use [MT Manager] — long press on a folder or file --> Properties --> tap on the directory to copy the absolute path of the folder, or long press on the name to copy the absolute path of the file."/>
     </action>
 </group>
 <group title="About">
     <page title="Special Thanks" config="file:///android_asset/kr-script/thank.xml" />
 </group>
+</root>
