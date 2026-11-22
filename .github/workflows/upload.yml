@@ -18,6 +18,11 @@ jobs:
   telegram_upload:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Download artifacts
         uses: actions/download-artifact@v5
         with:
@@ -65,9 +70,13 @@ jobs:
           MD5=$(md5sum "$APK" | awk '{print $1}')
           NAME=$(basename "$APK")
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          BRANCH="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME:-$(git rev-parse --abbrev-ref HEAD)}}"
+          ESC_BRANCH=$(printf '%s' "$BRANCH" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')
+          COMMIT=$(git rev-parse --short HEAD)
+          COMMITS=$(git log -3 --pretty=format:'%h %s' | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')
 
-          CAPTION=$(printf '%s\n\n<b>File:</b> <code>%s</code>\n<b>Date:</b> %s\n<b>Size:</b> %s MB\n<b>MD5:</b> <code>%s</code>\n<b>Run:</b> %s' \
-            "${{ inputs.caption_title }}" "$NAME" "$DATE" "$SIZE" "$MD5" "$RUN_URL")
+          CAPTION=$(printf '%s\n\n<b>File:</b> <code>%s</code>\n<b>Date:</b> %s\n<b>Size:</b> %s MB\n<b>MD5:</b> <code>%s</code>\n<b>Branch:</b> <code>%s</code>\n<b>Commit:</b> <code>%s</code>\n<b>Last 3 commits:</b>\n<pre>%s</pre>\n<b>Run:</b> %s' \
+            "${{ inputs.caption_title }}" "$NAME" "$DATE" "$SIZE" "$MD5" "$ESC_BRANCH" "$COMMIT" "$COMMITS" "$RUN_URL")
 
           curl --fail --silent --show-error --retry 3 --retry-delay 2 \
             -F document=@"$APK" \
