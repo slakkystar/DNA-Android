@@ -5,6 +5,14 @@
     <string name="btn_skip">Skip</string>
     <string name="btn_exit">Exit</string>
     <string name="btn_hide">Hide</string>
+    <string name="btn_force_stop">Force stop</string>
+    <string name="force_stop_title">Force stop</string>
+    <string name="force_stop_message">Are you sure? The build will be stopped completely and everything created during this run will be deleted. You can start it again afterwards.</string>
+    <string name="force_stop_confirm">Force stop</string>
+    <string name="force_stop_cancel">Cancel</string>
+    <string name="force_stop_stopping">Stopping…</string>
+    <string name="force_stop_done">Build stopped. Files created during this run were deleted.</string>
+    <string name="force_stop_partial">Build stopped, but some files could not be removed.</string>
     <string name="btn_execute">Execute</string>
     <string name="onloading">Loading data…</string>
     <string name="kr_shell_completed">Script execution completed</string>

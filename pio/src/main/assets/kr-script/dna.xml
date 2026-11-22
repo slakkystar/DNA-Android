@@ -78,7 +78,7 @@
 </group>
 
 <group title="Pack Menu">
-    <action interruptible="false">
+    <action interruptible="false" force-stop="true">
         <title>Pack a single partition</title>
         <set>dna repack $IMG_DIR --read $Read --auto $Pack --format $img_type --type $repack_from --br $brze --erofs $erofsze --mode $type --compress $test --hal-fallback $hal_fallback --convert $tool --profile $perf --auto-speed $auto_speed</set>
         <param name="IMG_DIR" options-sh="samples/findfile.sh dir" desc="IMG packing format will be automatically detected" separator="," required="true" multiple="true"/>
@@ -135,7 +135,7 @@
         <param name="level" required="true" value="3" label="ZSTD compression level" desc="Note: The higher the number, the slower the compression, choose wisely!" type="seekbar" max="19" min="0"/>
     </action>
 
-    <action interruptible="false">
+    <action interruptible="false" force-stop="true">
         <title>Pack super.img</title>
         <set>dna lpmake --type $type --format $from --super_size $size --super_group $super_group $IMG_NAME</set>
         <param name="type" label="Type">
@@ -186,7 +186,7 @@
         <param name="IMG" title="Select IMG file:" separator="," options-sh="samples/findfile.sh img" desc="Place your file in the project path /sdcard/DNA" required="true" multiple="true"/>
     </action>
 
-    <action interruptible="false">
+    <action interruptible="false" force-stop="true">
         <title>img to dat, br</title>
         <set>dna convert $IMG --delete $silence --type $from --br $brze</set>
         <param name="silence" label="Delete source file after completion" type="checkbox" />

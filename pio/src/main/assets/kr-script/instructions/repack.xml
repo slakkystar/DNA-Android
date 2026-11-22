@@ -113,6 +113,13 @@
     </text>
 
     <text>
+        <slice size="20" bold="true" break="true">Force stop</slice>
+        <slice break="true">Available while packing a single partition, packing super.img or converting an image. The "Force stop" button replaces "Hide" for these actions and always asks for confirmation.</slice>
+        <slice break="true">It stops the build completely and deletes every file created by this run, including finished images and temporary files. You can start the build again right away with different options.</slice>
+        <slice break="true" color="#ff9500">It does not roll back changes to the partition tree or configuration files, does not restore original source images, and cannot recover source files already removed with "Delete source file".</slice>
+    </text>
+
+    <text>
         <slice size="20" bold="true" break="true">Packing super.img</slice>
         <slice break="true">A separate packing of the dynamic super partition, which combines logical partitions (system, vendor, product, etc.)</slice>
     </text>

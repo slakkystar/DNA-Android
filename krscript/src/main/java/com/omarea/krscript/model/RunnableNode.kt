@@ -10,6 +10,8 @@ open class RunnableNode(currentConfigXml: String) : ClickableNode(currentConfigX
     var autoOff: Boolean = false
     // 是否可中断执行
     var interruptable: Boolean = true
+    // Force Stop 按钮（强制停止并删除本次运行创建的文件）
+    var forceStop: Boolean = false
     // 是否在执行完以后重载整个界面
     var reloadPage: Boolean = false
     // 执行完之后要刷新的功能区域 (id)

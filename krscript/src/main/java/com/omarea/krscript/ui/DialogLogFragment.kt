@@ -18,6 +18,7 @@ import android.widget.TextView
 import android.widget.Toast
 import com.omarea.common.ui.DialogHelper
 import com.omarea.krscript.R
+import com.omarea.krscript.executor.ScriptEnvironmen
 import com.omarea.krscript.executor.ShellExecutor
 import com.omarea.krscript.model.RunnableNode
 import com.omarea.krscript.model.ShellHandlerBase
@@ -60,7 +61,7 @@ class DialogLogFragment : androidx.fragment.app.DialogFragment() {
         if (nodeInfo != null) {
             nodeInfo?.run {
                 // 如果执行完以后需要刷新界面，那么就不允许隐藏日志窗口到后台执行
-                if (reloadPage) {
+                if (reloadPage || forceStop) {
                     btn_hide.visibility = View.GONE
                 }
 
@@ -75,13 +76,80 @@ class DialogLogFragment : androidx.fragment.app.DialogFragment() {
         }
     }
 
+    private fun performForceStop(forceStopRunnable: Runnable?) {
+        val activity = activity ?: return
+        btn_exit.isEnabled = false
+        btn_exit.text = getString(R.string.force_stop_stopping)
+        Thread {
+            var output = ""
+            var error = false
+            val stopThread = Thread {
+                try {
+                    output = ScriptEnvironmen.executeResultRoot(
+                            activity,
+                            "export DNA_TMP=\"\${DNA_TMP:-/data/DNA}\"; dna stop; echo DNA_STOP_RC=\$?",
+                            nodeInfo
+                    ) ?: ""
+                } catch (ex: Exception) {
+                    error = true
+                }
+            }
+            stopThread.start()
+            try {
+                stopThread.join(20000)
+            } catch (ex: InterruptedException) {
+                error = true
+            }
+            val timedOut = stopThread.isAlive
+            val success = !error && !timedOut && output.contains("DNA_STOP_RC=0")
+            activity.runOnUiThread {
+                if (!isAdded) {
+                    return@runOnUiThread
+                }
+                try {
+                    forceStopRunnable?.run()
+                } catch (ex: Exception) {
+                }
+                Toast.makeText(
+                        activity,
+                        if (success) R.string.force_stop_done else R.string.force_stop_partial,
+                        Toast.LENGTH_LONG
+                ).show()
+                closeView()
+            }
+        }.start()
+    }
+
     private fun openExecutor(nodeInfo: RunnableNode): ShellHandlerBase? {
         var forceStopRunnable: Runnable? = null
+        var forceStopConfirmed = false
 
         btn_hide.setOnClickListener {
             closeView()
         }
         btn_exit.setOnClickListener {
+            if (running && nodeInfo.forceStop) {
+                if (forceStopConfirmed) {
+                    return@setOnClickListener
+                }
+                val activity = activity ?: return@setOnClickListener
+                DialogHelper.confirm(
+                        activity,
+                        getString(R.string.force_stop_title),
+                        getString(R.string.force_stop_message),
+                        null,
+                        DialogHelper.DialogButton(getString(R.string.force_stop_confirm), Runnable {
+                            if (!running) {
+                                closeView()
+                            } else {
+                                forceStopConfirmed = true
+                                performForceStop(forceStopRunnable)
+                            }
+                        }),
+                        DialogHelper.DialogButton(getString(R.string.force_stop_cancel), null)
+                )
+                return@setOnClickListener
+            }
             if (running) {
                 forceStopRunnable?.run()
             }
@@ -98,7 +166,11 @@ class DialogLogFragment : androidx.fragment.app.DialogFragment() {
                 Toast.makeText(context, getString(R.string.copy_fail), Toast.LENGTH_SHORT).show()
             }
         }
-        if (nodeInfo.interruptable) {
+        if (nodeInfo.forceStop) {
+            btn_hide?.visibility = View.GONE
+            btn_exit?.visibility = View.VISIBLE
+            btn_exit?.setText(R.string.btn_exit)
+        } else if (nodeInfo.interruptable) {
             btn_hide?.visibility = View.VISIBLE
             btn_exit?.visibility = View.VISIBLE
         } else {
@@ -127,6 +199,7 @@ class DialogLogFragment : androidx.fragment.app.DialogFragment() {
                 if (btn_hide != null) {
                     btn_hide.visibility = View.GONE
                     btn_exit.visibility = View.VISIBLE
+                    btn_exit.setText(R.string.btn_exit)
                     action_progress.visibility = View.GONE
                 }
 
@@ -142,7 +215,11 @@ class DialogLogFragment : androidx.fragment.app.DialogFragment() {
             override fun onStart(forceStop: Runnable?) {
                 running = true
 
-                if (nodeInfo.interruptable && forceStop != null) {
+                if (nodeInfo.forceStop) {
+                    btn_hide.visibility = View.GONE
+                    btn_exit.visibility = View.VISIBLE
+                    btn_exit.setText(R.string.btn_force_stop)
+                } else if (nodeInfo.interruptable && forceStop != null) {
                     btn_exit.visibility = View.VISIBLE
                 } else {
                     btn_exit.visibility = View.GONE

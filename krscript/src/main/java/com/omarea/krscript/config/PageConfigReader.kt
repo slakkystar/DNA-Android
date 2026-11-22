@@ -429,6 +429,8 @@ class PageConfigReader {
                     "auto-finish" -> clickableNode.autoFinish = (attrValue == "auto-finish" || attrValue == "true" || attrValue == "1")
                     "interruptible", "interruptable" -> clickableNode.interruptable = (
                             attrValue.isEmpty() || attrValue == "interruptable" || attrValue == "interruptable" || attrValue == "true" || attrValue == "1")
+                    "force-stop", "force_stop" -> clickableNode.forceStop = (
+                            attrValue.isEmpty() || attrValue == "force-stop" || attrValue == "true" || attrValue == "1")
                     "reload-page" -> {
                         if (attrValue == "reload-page" || attrValue == "reload" || attrValue == "page" || attrValue == "true" || attrValue == "1") {
                             clickableNode.reloadPage = true
