@@ -1903,15 +1903,72 @@ static int fc_hal_pick(const char *dro, const char *base, char *out, size_t on) 
     return 0;
 }
 
+typedef struct cil_tok { char *s; struct cil_tok *next; } cil_tok_t;
+
 static char **g_cil_files;
 static size_t g_cil_n, g_cil_cap;
 static char *g_cil_root;
+static cil_tok_t **g_cil_tab;
+static size_t g_cil_tab_n, g_cil_tab_cap;
+
+static size_t cil_hash(const char *s) {
+    size_t h = 2166136261u;
+    while (*s) { h ^= (unsigned char)*s++; h *= 16777619u; }
+    return h;
+}
 
 static void fc_cil_reset(void) {
     for (size_t i = 0; i < g_cil_n; i++) free(g_cil_files[i]);
     free(g_cil_files); g_cil_files = NULL;
     g_cil_n = g_cil_cap = 0;
     free(g_cil_root); g_cil_root = NULL;
+    if (g_cil_tab) {
+        for (size_t i = 0; i < g_cil_tab_cap; i++) {
+            cil_tok_t *t = g_cil_tab[i];
+            while (t) { cil_tok_t *n = t->next; free(t->s); free(t); t = n; }
+        }
+        free(g_cil_tab); g_cil_tab = NULL;
+    }
+    g_cil_tab_n = g_cil_tab_cap = 0;
+}
+
+static int cil_tab_grow(void) {
+    size_t nc = g_cil_tab_cap ? g_cil_tab_cap * 2 : 1024;
+    cil_tok_t **nt = calloc(nc, sizeof *nt);
+    if (!nt) return -1;
+    for (size_t i = 0; i < g_cil_tab_cap; i++) {
+        cil_tok_t *t = g_cil_tab[i];
+        while (t) {
+            cil_tok_t *nx = t->next;
+            size_t h = cil_hash(t->s) & (nc - 1);
+            t->next = nt[h]; nt[h] = t;
+            t = nx;
+        }
+    }
+    free(g_cil_tab); g_cil_tab = nt; g_cil_tab_cap = nc;
+    return 0;
+}
+
+static int cil_tab_add(const char *s, size_t len) {
+    if ((g_cil_tab_n + 1) * 4 >= g_cil_tab_cap * 3 && cil_tab_grow()) return -1;
+    char *v = malloc(len + 1);
+    if (!v) return -1;
+    memcpy(v, s, len); v[len] = 0;
+    size_t h = cil_hash(v) & (g_cil_tab_cap - 1);
+    for (cil_tok_t *t = g_cil_tab[h]; t; t = t->next)
+        if (!strcmp(t->s, v)) { free(v); return 0; }
+    cil_tok_t *t = malloc(sizeof *t);
+    if (!t) { free(v); return -1; }
+    t->s = v; t->next = g_cil_tab[h]; g_cil_tab[h] = t; g_cil_tab_n++;
+    return 0;
+}
+
+static int cil_tab_has(const char *s) {
+    if (!g_cil_tab_cap) return 0;
+    size_t h = cil_hash(s) & (g_cil_tab_cap - 1);
+    for (cil_tok_t *t = g_cil_tab[h]; t; t = t->next)
+        if (!strcmp(t->s, s)) return 1;
+    return 0;
 }
 
 static void fc_cil_collect(const char *dir, int depth) {
@@ -1942,33 +1999,24 @@ static void fc_cil_collect(const char *dir, int depth) {
     closedir(d);
 }
 
-static int fc_token(const char *buf, const char *tok) {
-    size_t n = strlen(tok);
-    const char *p = buf;
-    while ((p = strstr(p, tok))) {
-        int left = (p == buf) || !(isalnum((unsigned char)p[-1]) || p[-1] == '_');
-        int right = !(isalnum((unsigned char)p[n]) || p[n] == '_');
-        if (left && right) return 1;
-        p += n;
-    }
-    return 0;
-}
-
-static int fc_cil_file(const char *path, const char *type) {
+static void fc_cil_load(const char *path) {
     FILE *f = fopen(path, "rb");
-    if (!f) return 0;
-    if (fseek(f, 0, SEEK_END)) { fclose(f); return 0; }
+    if (!f) return;
+    if (fseek(f, 0, SEEK_END)) { fclose(f); return; }
     long sz = ftell(f);
-    if (sz <= 0 || sz > (128L << 20)) { fclose(f); return 0; }
+    if (sz <= 0 || sz > (128L << 20)) { fclose(f); return; }
     rewind(f);
     char *buf = malloc((size_t)sz + 1);
-    if (!buf) { fclose(f); return 0; }
+    if (!buf) { fclose(f); return; }
     size_t got = fread(buf, 1, (size_t)sz, f);
     fclose(f);
-    buf[got] = 0;
-    int r = fc_token(buf, type);
+    for (size_t i = 0; i < got && buf[i]; ) {
+        while (i < got && !(isalnum((unsigned char)buf[i]) || buf[i] == '_')) i++;
+        size_t start = i;
+        while (i < got && (isalnum((unsigned char)buf[i]) || buf[i] == '_')) i++;
+        if (i > start && cil_tab_add(buf + start, i - start)) break;
+    }
     free(buf);
-    return r;
 }
 
 static int fc_cil_has(const char *dro, const char *type) {
@@ -1977,9 +2025,10 @@ static int fc_cil_has(const char *dro, const char *type) {
         g_cil_root = strdup(dro);
         if (!g_cil_root) return 0;
         fc_cil_collect(dro, 0);
+        if (g_cil_n && !g_cil_tab_cap) cil_tab_grow();
+        for (size_t i = 0; i < g_cil_n; i++) fc_cil_load(g_cil_files[i]);
     }
-    for (size_t i = 0; i < g_cil_n; i++) if (fc_cil_file(g_cil_files[i], type)) return 1;
-    return 0;
+    return cil_tab_has(type);
 }
 
 typedef struct {
