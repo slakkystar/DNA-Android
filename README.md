@@ -72,11 +72,11 @@ Alternatively pass `-PdnaCc=/path/to/aarch64-linux-android-clang` or put such a
 compiler on `PATH` (for example, a Termux Android clang wrapper).
 
 Source builds also include xz-embedded (0BSD) and decode `REPLACE_XZ` payload
-operations in-process. Payload extraction uses a worker pool sized from RAM:
-8 workers at 5.5 GiB+ `MemTotal`, 4 at 3 GiB+, 2 below that, dropping to 1 on
-very low RAM; the count is capped by CPU count. Set
-`DNA_PAYLOAD_WORKERS=<1-8>` to override it. Bzip2, Brotli and Zstd operations
-still use the bundled helpers through non-blocking pipes.
+operations in-process. Payload extraction uses a worker pool sized from
+available memory, temperature, PSI, the CPU budget and the selected device
+profile; the count is capped by CPU count. `DNA_PAYLOAD_WORKERS=<1-8>` still
+takes priority over automatic sizing. Bzip2, Brotli and Zstd operations still
+use the bundled helpers through non-blocking pipes.
 
 To build the superchunk helpers from source instead of using the prebuilt
 `merge_superchunk`, `seprate_superchunk` and `chunk_split`:
@@ -132,6 +132,40 @@ The GitHub Actions workflows expose `dna_from_source`, `superchunk_from_source`,
 `f2fs_clean` and `upload_to_telegram` inputs. Telegram upload requires the
 `TELEGRAM_TOKEN` and `TELEGRAM_CHAT_ID` secrets and prefers the signed APK when
 one is built.
+
+## ⚡ Performance tuning
+
+`dna perf` shows the detected device profile and plan; add `--shell` or `--json`
+for machine-readable output, or `--bench` to benchmark safe worker counts and
+write the result to `.dna-perf-bench.json`. Benchmark results are not applied
+automatically.
+
+Profiles are `auto`, `saver`, `balanced`, `fast` and `turbo`. Automatic mode
+picks parallelism and nice level from RAM, CPU, storage and temperature without
+changing compression quality. Explicit flags override environment variables,
+which override the automatic profile.
+
+Useful `dna repack` options:
+
+- `--profile`, `--jobs`, `--erofs-workers`, `--brotli-jobs`, `--nice`
+- `--mem-reserve-mb`, `--thermal-limit`
+- `--incremental` to skip unchanged partitions (also `DNA_INCREMENTAL=1`)
+- `--auto-speed` to tune lz4hc/brotli levels from the profile (lz4hc only)
+- `--no-fsck` to skip the ext4 check before shrinking (also `DNA_SKIP_FSCK=1`)
+
+Environment variables: `DNA_PERF`, `DNA_JOBS`, `DNA_EROFS_WORKERS`,
+`DNA_BROTLI_JOBS`, `DNA_ZSTD_THREADS`, `DNA_NICE`, `DNA_MEM_RESERVE_MB`,
+`DNA_THERMAL_BATTERY`, `DNA_THERMAL_SKIN`, `DNA_THERMAL_SOC`, `DNA_WAKELOCK`,
+`DNA_CPUSET`, `DNA_PROTECT`, `DNA_OOM_SCORE_ADJ`, `DNA_PERF_DEBUG`,
+`DNA_INCREMENTAL`, `DNA_SKIP_FSCK`, `DNA_SPACE_CHECK` and
+`DNA_PAYLOAD_WORKERS`.
+
+Build actions for repacking, `super.img` packing and image conversion show a
+**Force stop** button in the log window. After confirmation it runs `dna stop`,
+stops the build completely and deletes files created by that run. `dna stop` can
+also be run manually. It does not roll back partition tree or configuration
+changes, restore source images, or recover files deleted with "Delete source
+file".
 
 ## 📄 License
 
