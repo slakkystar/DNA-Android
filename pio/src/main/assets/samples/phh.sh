@@ -20,6 +20,6 @@ if [ ! -d "$src" ]; then
 fi
 
 #
-echo "Copying phh_init (A$A) into $project/system/system/ not found"
+echo "Copying phh_init (A$A) into $project/system/system/ "
 cp -rf "$src"/. "$DNA_DRO/system/system/"
 echo ">> phh_init (A$A) copied"

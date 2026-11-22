@@ -6,7 +6,6 @@ vgc_prop="$port/vgc/vgc.prop"
 oem_prop="$port/oem/oem.prop"
 oem_vendor_prop="$port/oem/vendor.prop"
 dyn_prop="$port/dyn/dyn.prop"
-phh_src="$START_DIR/samples/phh_init/A$android_version"
 
 echo "=== OriginOS Auto-Port ==="
 
@@ -74,6 +73,8 @@ android_version=$(grep -m1 "^ro.system.build.version.release=" "$build_prop" | c
 if [ -z "$android_version" ]; then
     echo ">> Error: ro.system.build.version.release not found in $build_prop"
     exit 1
+else
+phh_src="$START_DIR/samples/phh_init/A$android_version"
 fi
 echo ">> Detected Android version: $android_version"
 

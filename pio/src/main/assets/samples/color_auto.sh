@@ -101,7 +101,7 @@ fi
 echo "Updating Oplusrom version"
 manifest_files=(
     "$manifest_prop"
-    "$product_prop_file"
+    "$my_product_prop"
 )
 
 for prop_file in "${manifest_files[@]}"; do
