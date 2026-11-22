@@ -144,6 +144,16 @@ static void part_done_line(void) {
     printf("> Done in: %.2f secs\n", secs);
 }
 
+static void all_done_line(const struct timespec *t0, int images) {
+    if (images <= 1) return;
+    struct timespec t1;
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    double secs = (double)(t1.tv_sec - t0->tv_sec) +
+                  (double)(t1.tv_nsec - t0->tv_nsec) / 1000000000.0;
+    printf("> All done in: %.2f secs (%d images)\n", secs, images);
+    fflush(stdout);
+}
+
 /* ---------- format detection ---------- */
 
 static int rd(FILE *f, long off, void *buf, size_t n) {
@@ -2568,30 +2578,52 @@ static int dir_has_prefix(const char *dir, const char *prefix) {
     return found;
 }
 
-static int dir_has_substr(const char *dir, const char *needle) {
+static int storage_sd_ufs(void) {
+    char dir[4096], p[4096], rp[4096], model[256];
+    syspath(dir, sizeof dir, "/sys/block");
     DIR *d = opendir(dir);
     if (!d) return 0;
     struct dirent *de;
     int found = 0;
     while ((de = readdir(d))) {
-        if (strstr(de->d_name, needle)) { found = 1; break; }
+        if (strncmp(de->d_name, "sd", 2)) continue;
+        snprintf(p, sizeof p, "%s/%s/device", dir, de->d_name);
+        if (realpath(p, rp) && lower_has(rp, "ufs")) { found = 1; break; }
+        snprintf(p, sizeof p, "%s/%s/device/model", dir, de->d_name);
+        if (read_text_path(p, model, sizeof model) && lower_has(model, "ufs")) { found = 1; break; }
+    }
+    closedir(d);
+    return found;
+}
+
+static int storage_has_ufs(void) {
+    char p[4096], dir[4096], name[256];
+    if (!access(syspath(p, sizeof p, "/sys/class/ufs"), F_OK)) return 1;
+    if (!access(syspath(p, sizeof p, "/sys/bus/ufs"), F_OK)) return 1;
+    if (storage_sd_ufs()) return 1;
+    syspath(dir, sizeof dir, "/sys/class/scsi_host");
+    DIR *d = opendir(dir);
+    if (!d) return 0;
+    struct dirent *de;
+    int found = 0;
+    while ((de = readdir(d))) {
+        if (de->d_name[0] == '.') continue;
+        snprintf(p, sizeof p, "%s/%s/proc_name", dir, de->d_name);
+        if (read_text_path(p, name, sizeof name) && lower_has(name, "ufs")) { found = 1; break; }
     }
     closedir(d);
     return found;
 }
 
 static int storage_detect(void) {
-    char p[4096];
-    if (!access(syspath(p, sizeof p, "/sys/block/mmcblk0"), F_OK)) return STORAGE_EMMC;
+    char p[4096], block[4096];
     if (!access(syspath(p, sizeof p, "/sys/block/nvme0n1"), F_OK)) return STORAGE_NVME;
-    int sda = !access(syspath(p, sizeof p, "/sys/block/sda"), F_OK);
-    char cls[4096], plat[4096];
-    syspath(cls, sizeof cls, "/sys/class");
-    syspath(plat, sizeof plat, "/sys/devices/platform");
-    if (sda && (dir_has_prefix(cls, "ufs") || dir_has_substr(plat, "ufs"))) return STORAGE_UFS;
-    if (!access(syspath(p, sizeof p, "/sys/block"), F_OK) && dir_has_prefix(syspath(p, sizeof p, "/sys/block"), "s")) return STORAGE_OTHER;
-    if (!access(syspath(p, sizeof p, "/sys/block/mmcblk"), F_OK)) return STORAGE_OTHER;
-    DIR *d = opendir(syspath(p, sizeof p, "/sys/block"));
+    if (storage_has_ufs()) return STORAGE_UFS;
+    syspath(block, sizeof block, "/sys/block");
+    if (dir_has_prefix(block, "sd")) return STORAGE_UFS;
+    if (!access(syspath(p, sizeof p, "/sys/block/mmcblk0"), F_OK)) return STORAGE_EMMC;
+    if (!access(block, F_OK) && dir_has_prefix(block, "mmcblk")) return STORAGE_OTHER;
+    DIR *d = opendir(block);
     if (!d) return STORAGE_UNKNOWN;
     struct dirent *de;
     int any = 0;
@@ -3372,6 +3404,8 @@ static int autospeed_apply(ropts_t *o, perf_class_t cls) {
 static int cmd_repack_impl(int argc, char **argv) {
     ropts_t o = { 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "lz4hc", 0 }; int conv = 0, inc_set = 0;
     char *names[128]; int nn = 0;
+    struct timespec all_t0; int nimages = 0;
+    clock_gettime(CLOCK_MONOTONIC, &all_t0);
     perf_ovr_t ov; perf_ovr_from_env(&ov);
     for (int i = 0; i < argc; i++) {
         const char *a = argv[i]; int hasv = i + 1 < argc;
@@ -3424,6 +3458,7 @@ static int cmd_repack_impl(int argc, char **argv) {
         else if (conv == 2) ld.n_f2fs++;
         else ld.n_ext4++;
     }
+    nimages = ld.n_boot + ld.n_ext4 + ld.n_erofs + ld.n_f2fs;
     perf_t perf; perf_detect(&perf);
     perf_make_plan(&perf, &ld, &ov);
     if (autospeed_apply(&o, perf.cls))
@@ -3467,6 +3502,7 @@ static int cmd_repack_impl(int argc, char **argv) {
                 if (g_stop) break;
             }
         }
+        all_done_line(&all_t0, nimages);
         return fail ? 1 : 0;
     }
 
@@ -3579,6 +3615,7 @@ static int cmd_repack_impl(int argc, char **argv) {
         }
     }
     free(tasks);
+    all_done_line(&all_t0, nimages);
     return fail ? 1 : 0;
 }
 
