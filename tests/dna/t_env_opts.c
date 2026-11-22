@@ -36,6 +36,8 @@ int main(void) {
     CHECK(strcmp(slurp(test_path("env/sys/power/wake_lock")), "dna-repack") == 0);
     stop_handler(SIGTERM);
     CHECK(g_stop == 1);
+    CHECK(g_wake_locked == 1);
+    wake_unlock();
     CHECK(g_wake_locked == 0);
     CHECK(strcmp(slurp(test_path("env/sys/power/wake_unlock")), "dna-repack") == 0);
     g_stop = 0;

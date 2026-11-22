@@ -421,11 +421,57 @@ static void perf_child_setup(void) {
     }
 }
 
+static volatile sig_atomic_t g_stop;
+static int run_active(void);
+static void run_note(const char *kind, const char *path);
+static void run_note_group(pid_t pid);
+static void run_register(const char *dir);
+static void run_unregister(void);
+static int run_abort_cleanup(int mode);
+static void install_stop_handlers(void);
+#define STOP_CHECK() do { if (g_stop) return -1; } while (0)
+
+static int wait_child_stoppable(pid_t p, int *st) {
+    int sent = 0, killed = 0;
+    struct timespec t0 = {0, 0};
+    for (;;) {
+        pid_t r = waitpid(p, st, g_stop ? WNOHANG : 0);
+        if (r == p) return 0;
+        if (r < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (!g_stop) continue;
+        if (!sent) {
+            kill(-p, SIGTERM);
+            kill(p, SIGTERM);
+            clock_gettime(CLOCK_MONOTONIC, &t0);
+            sent = 1;
+        }
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        double el = (double)(now.tv_sec - t0.tv_sec) + (double)(now.tv_nsec - t0.tv_nsec) / 1e9;
+        if (!killed && el >= 3.0) {
+            kill(-p, SIGKILL);
+            kill(p, SIGKILL);
+            killed = 1;
+        }
+        struct timespec ts = { 0, 100000000 };
+        nanosleep(&ts, NULL);
+    }
+}
+
 static int run(char *const argv[]) {
     pid_t p = fork();
     if (p < 0) return -1;
     if (p == 0) {
         perf_child_setup();
+        if (run_active()) {
+            setpgid(0, 0);
+            signal(SIGINT, SIG_DFL);
+            signal(SIGTERM, SIG_DFL);
+            signal(SIGUSR1, SIG_DFL);
+        }
         if (g_repack_quiet) {
             int fd = open("/dev/null", O_WRONLY);
             if (fd >= 0) {
@@ -436,7 +482,8 @@ static int run(char *const argv[]) {
         }
         execvp(argv[0], argv); fprintf(stderr, "> Error: cannot run %s: %s\n", argv[0], strerror(errno)); _exit(127);
     }
-    int st; waitpid(p, &st, 0);
+    if (run_active()) { setpgid(p, p); run_note_group(p); }
+    int st = 0; wait_child_stoppable(p, &st);
     return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
 }
 
@@ -447,6 +494,12 @@ static int run_quiet(char *const argv[]) {
     if (p < 0) return -1;
     if (p == 0) {
         perf_child_setup();
+        if (run_active()) {
+            setpgid(0, 0);
+            signal(SIGINT, SIG_DFL);
+            signal(SIGTERM, SIG_DFL);
+            signal(SIGUSR1, SIG_DFL);
+        }
         if (!g_debug) {
             int fd = open("/dev/null", O_WRONLY);
             if (fd >= 0) {
@@ -457,7 +510,8 @@ static int run_quiet(char *const argv[]) {
         }
         execvp(argv[0], argv); fprintf(stderr, "> Error: cannot run %s: %s\n", argv[0], strerror(errno)); _exit(127);
     }
-    int st; waitpid(p, &st, 0);
+    if (run_active()) { setpgid(p, p); run_note_group(p); }
+    int st = 0; wait_child_stoppable(p, &st);
     return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
 }
 
@@ -466,6 +520,12 @@ static pid_t spawn_filter(char *const argv[], int in_fd, int out_fd, int hide_er
     if (p < 0) return -1;
     if (p == 0) {
         perf_child_setup();
+        if (run_active()) {
+            setpgid(0, 0);
+            signal(SIGINT, SIG_DFL);
+            signal(SIGTERM, SIG_DFL);
+            signal(SIGUSR1, SIG_DFL);
+        }
         if (dup2(in_fd, STDIN_FILENO) < 0 || dup2(out_fd, STDOUT_FILENO) < 0) _exit(1);
         if (hide_err && g_repack_quiet) {
             int fd = open("/dev/null", O_WRONLY);
@@ -477,6 +537,7 @@ static pid_t spawn_filter(char *const argv[], int in_fd, int out_fd, int hide_er
         fprintf(stderr, "> Error: cannot run %s: %s\n", argv[0], strerror(errno));
         _exit(127);
     }
+    if (run_active()) { setpgid(p, p); run_note_group(p); }
     return p;
 }
 
@@ -1075,6 +1136,7 @@ static int read_at_full(int fd, uint8_t *buf, size_t n, uint64_t off, uint64_t s
 static int sparse_feed_data(spw_t *w, int fd, uint64_t start_blk, uint64_t nblk, uint64_t size, uint8_t *buf, const uint8_t *zero) {
     const uint64_t per = (4u << 20) / SPARSE_BS;
     while (nblk) {
+        if (g_stop) return -1;
         uint64_t n = nblk > per ? per : nblk;
         uint64_t off = start_blk * SPARSE_BS;
         if (read_at_full(fd, buf, (size_t)n * SPARSE_BS, off, size)) return -1;
@@ -1109,6 +1171,7 @@ static int raw_to_sparse(const char *src, const char *dst) {
     uint64_t next = 0;
     int seek_ok = 1;
     while (!rc && next < nblk) {
+        if (g_stop) { rc = -1; break; }
         if (seek_ok) {
             off_t d = lseek(fd, (off_t)(next * SPARSE_BS), SEEK_DATA);
             if (d < 0) {
@@ -1199,6 +1262,7 @@ static void rg_print(FILE *f, const char *cmd, const ranges_t *r) {
 static int dat_read_blocks(img_t *im, FILE *d, ranges_t *zero, ranges_t *data, uint8_t *buf, uint64_t start, uint64_t end) {
     int rc = 0;
     for (uint64_t b = start; b < end && !rc; ) {
+        if (g_stop) { rc = -1; break; }
         uint64_t nb = end - b; if (nb > 256) nb = 256;
         memset(buf, 0, nb * 4096);
         uint64_t off = b * 4096, have = im->size > off ? im->size - off : 0;
@@ -1225,6 +1289,7 @@ static int img_to_dat(const char *img, const char *outdir, const char *name, int
     snprintf(tlp, sizeof tlp, "%s/%s.transfer.list", outdir, name);
     snprintf(pdp, sizeof pdp, "%s/%s.patch.dat", outdir, name);
     fadv_seq(im.f);
+    run_note("T", datp); run_note("T", tlp); run_note("T", pdp);
     FILE *d = NULL;
     pid_t filter = -1;
     void (*old_pipe)(int) = SIG_DFL;
@@ -1281,7 +1346,7 @@ static int img_to_dat(const char *img, const char *outdir, const char *name, int
     if (fclose(d)) rc = -1;
     if (filter > 0) {
         int st = 0;
-        if (waitpid(filter, &st, 0) < 0 || !WIFEXITED(st) || WEXITSTATUS(st)) rc = -1;
+        if (wait_child_stoppable(filter, &st) < 0 || !WIFEXITED(st) || WEXITSTATUS(st)) rc = -1;
         signal(SIGPIPE, old_pipe);
     }
     if (!rc) drop_cache_path(datp);
@@ -1297,6 +1362,7 @@ static int img_to_dat(const char *img, const char *outdir, const char *name, int
         if (pd) fclose(pd);
     }
     free(zero.v); free(data.v);
+    if (!rc) run_note("O", datp);
     if (rc) { remove(datp); remove(tlp); remove(pdp); }
     return rc;
 }
@@ -1314,7 +1380,9 @@ static int cmd_convert(int argc, char **argv) {
     const char *pro = getenv("DNA_PRO"); char od[4400];
     snprintf(od, sizeof od, "%s/out", pro && *pro ? pro : ".");
     if (mkdir_p(od)) { fprintf(stderr, "> Error: cannot create %s\n", od); return 1; }
+    install_stop_handlers(); g_stop = 0; run_register(od);
     for (int i = 0; i < nn; i++) {
+        if (g_stop) break;
         char full[4400]; snprintf(full, sizeof full, "%s", names[i]);
         if (access(full, R_OK) && pro && *pro) snprintf(full, sizeof full, "%s/%s", pro, names[i]);
         if (access(full, R_OK)) { fprintf(stderr, "> Error: file not found: %s\n", names[i]); fail = 1; continue; }
@@ -1324,6 +1392,8 @@ static int cmd_convert(int argc, char **argv) {
         printf("> Done: %s/%s.%s\n", od, name, type ? "new.dat.br" : "new.dat");
         if (del) { printf("> Deleting: %s\n", names[i]); remove(full); }
     }
+    if (g_stop) { int rc = run_abort_cleanup((int)g_stop); return rc; }
+    run_unregister();
     return fail ? 1 : 0;
 }
 
@@ -1428,9 +1498,12 @@ static int finish_output(const char *raw, const char *final, const ropts_t *o) {
         return rc;
     }
     if (!access(final, F_OK)) VPRINTF("> Replacing existing: %s\n", final);
-    if (o->sparse && !o->out_kind) { VPRINTF("> Converting to sparse\n"); fflush(stdout); rc = raw_to_sparse(raw, final); drop_cache_path(raw); remove(raw); }
-    else rc = rename(raw, final);
-    if (!rc) part_done_line();
+    if (o->sparse && !o->out_kind) {
+        VPRINTF("> Converting to sparse\n"); fflush(stdout);
+        run_note("T", final);
+        rc = raw_to_sparse(raw, final); drop_cache_path(raw); remove(raw);
+    } else rc = rename(raw, final);
+    if (!rc) { run_note("O", final); part_done_line(); }
     return rc;
 }
 
@@ -1497,6 +1570,7 @@ static int repack_ext4(const char *name, const char *dro, const char *pro, const
     for (int attempt = 0; attempt < 8; attempt++) {
         VPRINTF("> Building <ext4> (%s): %s, %llu blocks (%llu MiB)\n", o->rw ? "RW" : "RO", name,
                (unsigned long long)blocks, (unsigned long long)(blocks * 4 / 1024)); fflush(stdout);
+        run_note("T", raw);
         remove(raw);
         FILE *z = fopen(raw, "wb"); if (!z) { fprintf(stderr, "> Error: cannot create %s\n", raw); return 1; }
         if (ftruncate(fileno(z), (off_t)(blocks * 4096))) { fclose(z); fprintf(stderr, "> Error: not enough space\n"); return 1; }
@@ -2300,6 +2374,7 @@ static int repack_erofs(const char *name, const char *dro, const char *pro, cons
     if (o->erofs_workers > 0) VPRINTF("> Building <erofs> (%s): %s, %d workers\n", comp, name, o->erofs_workers);
     else VPRINTF("> Building <erofs> (%s): %s\n", comp, name);
     fflush(stdout);
+    run_note("T", raw);
     remove(raw);
     if (run_quiet(a)) { fprintf(stderr, "> Error: mkfs.erofs failed\n"); remove(raw); return 1; }
     if (finish_output(raw, final, o)) return 1;
@@ -2334,6 +2409,7 @@ static int repack_f2fs(const char *name, const char *dro, const char *pro, const
     if (bytes < (64u << 20)) bytes = 64u << 20;
 
     VPRINTF("> Building <f2fs>: %s, %llu MiB\n", name, (unsigned long long)(bytes >> 20)); fflush(stdout);
+    run_note("T", raw);
     remove(raw);
     FILE *z = fopen(raw, "wb");
     if (!z) { fprintf(stderr, "> Error: cannot create %s\n", raw); return 1; }
@@ -2367,12 +2443,14 @@ static int repack_boot(const char *name, const char *dro, const char *pro) {
     if (!getcwd(cwd, sizeof cwd) || chdir(dir)) return 1;
     VPRINTF("> Repacking boot image: %s\n", name); fflush(stdout);
     char tmp[4700]; snprintf(tmp, sizeof tmp, "%s.tmp", final);
+    run_note("T", tmp);
     char *a[] = { "magiskboot", "repack", orig, tmp, NULL };
     int rc = run(a);
     if (chdir(cwd)) return 1;
     if (!rc) {
         if (!access(final, F_OK)) VPRINTF("> Replacing existing: %s\n", final);
         if (rename(tmp, final)) { fprintf(stderr, "> Error: cannot write %s\n", final); return 1; }
+        run_note("O", final);
         part_done_line();
         printf("> Done: %s\n", final);
     } else remove(tmp);
@@ -2946,11 +3024,195 @@ typedef struct {
 } build_task_t;
 
 static volatile sig_atomic_t g_stop = 0;
+static char g_run_path[4600], g_run_dir[4600];
+static int g_run_registered = 0;
+
+#define RUN_MAX_FILES 1024
+
+static int run_active(void) { return g_run_registered; }
+
+static void write_all_fd(int fd, const char *buf, size_t n) {
+    while (n) {
+        ssize_t w = write(fd, buf, n);
+        if (w < 0) { if (errno == EINTR) continue; break; }
+        if (!w) break;
+        buf += w; n -= (size_t)w;
+    }
+}
+
+static void run_journal(const char *fmt, ...) {
+    if (!g_run_registered) return;
+    char buf[8192];
+    va_list ap; va_start(ap, fmt);
+    int n = vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    if (n <= 0) return;
+    if ((size_t)n >= sizeof buf) n = (int)sizeof buf - 1;
+    int fd = open(g_run_path, O_WRONLY | O_CREAT | O_APPEND, 0600);
+    if (fd < 0) return;
+    write_all_fd(fd, buf, (size_t)n);
+    close(fd);
+}
+
+static void run_note(const char *kind, const char *path) {
+    if (!g_run_registered || !path || !*path) return;
+    run_journal("%s %s\n", kind, path);
+}
+
+static void run_note_group(pid_t pid) {
+    if (!g_run_registered || pid <= 0) return;
+    run_journal("P %d\n", (int)pid);
+}
+
+static int run_has_output(const char *path) {
+    if (!g_run_registered || !path || !g_run_path[0]) return 0;
+    FILE *f = fopen(g_run_path, "r");
+    if (!f) return 0;
+    char line[8192], probe[8192];
+    snprintf(probe, sizeof probe, "O %s\n", path);
+    size_t pl = strlen(probe);
+    int found = 0;
+    while (fgets(line, sizeof line, f)) {
+        if (strlen(line) == pl && !strcmp(line, probe)) { found = 1; break; }
+    }
+    fclose(f);
+    return found;
+}
+
+static long long proc_starttime(pid_t pid) {
+    char p[64]; snprintf(p, sizeof p, "/proc/%d/stat", (int)pid);
+    FILE *f = fopen(p, "r");
+    if (!f) return 0;
+    char buf[8192];
+    size_t n = fread(buf, 1, sizeof buf - 1, f); fclose(f); buf[n] = 0;
+    char *rp = strrchr(buf, ')');
+    if (!rp) return 0;
+    char *save = NULL;
+    char *tok = strtok_r(rp + 1, " ", &save);
+    for (int field = 3; tok && field < 22; field++) tok = strtok_r(NULL, " ", &save);
+    return tok ? strtoll(tok, NULL, 10) : 0;
+}
+
+static void run_atexit(void) {
+    if (g_run_registered && g_run_path[0]) unlink(g_run_path);
+    g_run_registered = 0;
+}
+
+static void run_register(const char *dir) {
+    if (!dir || !*dir) return;
+    char base[4400];
+    const char *tmp = getenv("DNA_TMP");
+    if (!tmp || !*tmp) tmp = getenv("TMPDIR");
+    if (!tmp || !*tmp) tmp = "/data/local/tmp";
+    snprintf(base, sizeof base, "%s/.dna-run", tmp);
+    if (mkdir_p(base)) return;
+    char ar[4400];
+    if (realpath(dir, ar)) snprintf(g_run_dir, sizeof g_run_dir, "%s", ar);
+    else if (dir[0] == '/') snprintf(g_run_dir, sizeof g_run_dir, "%s", dir);
+    else {
+        char cwd[2048];
+        if (getcwd(cwd, sizeof cwd)) snprintf(g_run_dir, sizeof g_run_dir, "%s/%s", cwd, dir);
+        else snprintf(g_run_dir, sizeof g_run_dir, "%s", dir);
+    }
+    snprintf(g_run_path, sizeof g_run_path, "%s/%d.run", base, (int)getpid());
+    g_run_registered = 1;
+    run_journal("START %d %lld\nDIR %s\n", (int)getpid(), proc_starttime(getpid()), g_run_dir);
+    static int registered;
+    if (!registered) { atexit(run_atexit); registered = 1; }
+}
+
+static void run_unregister(void) {
+    if (g_run_registered && g_run_path[0]) unlink(g_run_path);
+    g_run_registered = 0;
+    g_run_path[0] = g_run_dir[0] = 0;
+}
+
+static int path_has_dotdot(const char *p) {
+    const char *q = p;
+    while ((q = strstr(q, ".."))) {
+        if ((q == p || q[-1] == '/') && (q[2] == 0 || q[2] == '/')) return 1;
+        q += 2;
+    }
+    return 0;
+}
+
+static void run_skip(const char *path) {
+    fprintf(stderr, "> Warning: skipped %s\n", path);
+}
+
+static int run_safe_remove(const char *path, const char *realdir) {
+    if (!path || path[0] != '/' || !realdir[0] || path_has_dotdot(path)) { run_skip(path ? path : ""); return 0; }
+    char dir[4600];
+    snprintf(dir, sizeof dir, "%s", path);
+    char *sl = strrchr(dir, '/');
+    if (!sl || sl == dir) { run_skip(path); return 0; }
+    *sl = 0;
+    char rp[4096];
+    if (!realpath(dir, rp) || strcmp(rp, realdir)) { run_skip(path); return 0; }
+    struct stat st;
+    if (lstat(path, &st)) return 0;
+    if (!S_ISREG(st.st_mode)) { run_skip(path); return 0; }
+    if (unlink(path)) { run_skip(path); return 0; }
+    return 1;
+}
+
+static int run_cleanup_file(const char *rp, int mode) {
+    if (!rp || !*rp) return 130;
+    FILE *f = fopen(rp, "r");
+    if (!f) return 130;
+    char *temps[RUN_MAX_FILES], *outs[RUN_MAX_FILES], *pids[RUN_MAX_FILES];
+    int nt = 0, no = 0, np = 0;
+    char dir[4400] = "", line[8192];
+    memset(temps, 0, sizeof temps); memset(outs, 0, sizeof outs); memset(pids, 0, sizeof pids);
+    while (fgets(line, sizeof line, f)) {
+        char *nl = strpbrk(line, "\r\n"); if (nl) *nl = 0;
+        if (!strncmp(line, "DIR ", 4)) snprintf(dir, sizeof dir, "%s", line + 4);
+        else if (!strncmp(line, "T ", 2) && nt < RUN_MAX_FILES) temps[nt++] = strdup(line + 2);
+        else if (!strncmp(line, "O ", 2) && no < RUN_MAX_FILES) outs[no++] = strdup(line + 2);
+        else if (!strncmp(line, "P ", 2) && np < RUN_MAX_FILES) pids[np++] = strdup(line + 2);
+    }
+    fclose(f);
+    int any = 0;
+    for (int i = 0; i < np; i++) {
+        pid_t p = (pid_t)atoi(pids[i]);
+        if (p > 1 && kill(-p, 0) == 0) { kill(-p, SIGTERM); any = 1; }
+    }
+    if (any) {
+        struct timespec ts = { 0, 100000000 };
+        for (int i = 0; i < 30; i++) nanosleep(&ts, NULL);
+        for (int i = 0; i < np; i++) {
+            pid_t p = (pid_t)atoi(pids[i]);
+            if (p > 1) kill(-p, SIGKILL);
+        }
+    }
+    char realdir[4096] = "";
+    if (dir[0] && !realpath(dir, realdir)) realdir[0] = 0;
+    int removed = 0;
+    for (int i = 0; i < nt; i++) {
+        int is_out = 0;
+        if (mode < 2) for (int k = 0; k < no; k++) if (!strcmp(temps[i], outs[k])) { is_out = 1; break; }
+        if (!is_out) removed += run_safe_remove(temps[i], realdir);
+        free(temps[i]);
+    }
+    if (mode >= 2) for (int i = 0; i < no; i++) { removed += run_safe_remove(outs[i], realdir); free(outs[i]); }
+    else for (int i = 0; i < no; i++) free(outs[i]);
+    for (int i = 0; i < np; i++) free(pids[i]);
+    unlink(rp);
+    if (mode >= 2) printf("> Force stopped: %d file(s) removed\n", removed);
+    else printf("> Stopped\n");
+    fflush(stdout);
+    return 130;
+}
+
+/* Force stop only removes files created by this run. It is not a rollback:
+ * partition tree/config changes (delavb, fs_config, file_contexts), source images,
+ * sources already deleted by convert --delete, and pre-existing files are untouched. */
+static int run_abort_cleanup(int mode) {
+    return run_cleanup_file(g_run_path, mode);
+}
 
 static void stop_handler(int sig) {
-    (void)sig;
-    g_stop = 1;
-    wake_unlock();
+    g_stop = sig == SIGUSR1 ? 2 : 1;
 }
 
 static void install_stop_handlers(void) {
@@ -2961,6 +3223,7 @@ static void install_stop_handlers(void) {
     sa.sa_flags = 0;
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
+    sigaction(SIGUSR1, &sa, NULL);
 }
 
 static int task_cmp_desc(const void *a, const void *b) {
@@ -3015,6 +3278,7 @@ static int task_start(build_task_t *t, int conv, ropts_t *o, const char *dro, co
         if (getppid() == 1) _exit(1);
         signal(SIGINT, SIG_DFL);
         signal(SIGTERM, SIG_DFL);
+        signal(SIGUSR1, SIG_DFL);
         cpuset_add_self();
         if (dup2(fds[1], STDOUT_FILENO) < 0 || dup2(fds[1], STDERR_FILENO) < 0) _exit(1);
         close(fds[1]);
@@ -3027,6 +3291,7 @@ static int task_start(build_task_t *t, int conv, ropts_t *o, const char *dro, co
         _exit(rc ? 1 : 0);
     }
     setpgid(pid, pid);
+    run_note_group(pid);
     close(fds[1]);
     t->pid = pid;
     t->pipe_fd = fds[0];
@@ -3040,9 +3305,9 @@ static void task_remove_temps(const char *pro, const char *name) {
     snprintf(p, sizeof p, "%s/out/%s" REPACK_SUFFIX ".img.tmp", pro, name);
     remove(p);
     snprintf(p, sizeof p, "%s/out/%s.new.dat", pro, name);
-    remove(p);
+    if (!run_has_output(p)) remove(p);
     snprintf(p, sizeof p, "%s/out/%s.new.dat.br", pro, name);
-    remove(p);
+    if (!run_has_output(p)) remove(p);
     snprintf(p, sizeof p, "%s/out/%s.transfer.list", pro, name);
     remove(p);
     snprintf(p, sizeof p, "%s/out/%s.patch.dat", pro, name);
@@ -3073,7 +3338,7 @@ static int tasks_cancel(build_task_t *t, int nt, const char *pro) {
     }
     for (int i = 0; i < nt; i++) if (t[i].state == 1 && t[i].pid > 0) kill(-t[i].pid, SIGKILL);
     for (int i = 0; i < nt; i++) {
-        if (t[i].state == 1 && t[i].pid > 0) { int st; waitpid(t[i].pid, &st, 0); }
+        if (t[i].state == 1 && t[i].pid > 0) { int st; wait_child_stoppable(t[i].pid, &st); }
         if (t[i].pipe_fd >= 0) { close(t[i].pipe_fd); t[i].pipe_fd = -1; }
         if (t[i].started) task_remove_temps(pro, t[i].name);
         t[i].state = 2;
@@ -3181,6 +3446,7 @@ static int cmd_repack_impl(int argc, char **argv) {
     if (!parallel) {
         int fail = 0;
         for (int i = 0; i < nn; i++) {
+            if (g_stop) break;
             char *n = names[i]; size_t l = strlen(n); while (l && n[l - 1] == '/') n[--l] = 0;
             if (!strcmp(n, "config") || !*n) continue;
             char tree[4400], hdr[4600]; snprintf(tree, sizeof tree, "%s/%s", dro, n); snprintf(hdr, sizeof hdr, "%s/header", tree);
@@ -3189,7 +3455,11 @@ static int cmd_repack_impl(int argc, char **argv) {
             int is_boot = !access(hdr, R_OK);
             const char *fmt = is_boot ? "boot" : (conv == 1 ? "erofs" : (conv == 2 ? "f2fs" : "ext4"));
             printf("> Packing: %s <%s>\n", n, fmt); fflush(stdout);
-            if (repack_one(n, conv, &o, dro, pro, is_boot)) { fprintf(stderr, "> Failed: %s\n", n); fail = 1; }
+            if (repack_one(n, conv, &o, dro, pro, is_boot)) {
+                if (!g_stop) fprintf(stderr, "> Failed: %s\n", n);
+                fail = 1;
+                if (g_stop) break;
+            }
         }
         return fail ? 1 : 0;
     }
@@ -3218,7 +3488,6 @@ static int cmd_repack_impl(int argc, char **argv) {
     }
     if (nonboot > 1) qsort(tasks, (size_t)nonboot, sizeof *tasks, task_cmp_desc);
     install_stop_handlers();
-    g_stop = 0;
     int next = 0, active = 0, stop_new = 0, jobs = perf.part_jobs;
     int retry_pending = 0, retry_used = 0;
     build_task_t retry_task;
@@ -3308,10 +3577,19 @@ static int cmd_repack_impl(int argc, char **argv) {
 }
 
 static int cmd_repack(int argc, char **argv) {
+    install_stop_handlers();
+    g_stop = 0;
+    const char *pro = getenv("DNA_PRO");
+    char rd[4400];
+    snprintf(rd, sizeof rd, "%s/out", pro && *pro ? pro : ".");
+    mkdir_p(rd);
+    run_register(rd);
     start_wakelock();
     cpuset_add_self();
     oom_protect();
     int rc = cmd_repack_impl(argc, argv);
+    if (g_stop) rc = run_abort_cleanup((int)g_stop);
+    else run_unregister();
     wake_unlock();
     return rc;
 }
@@ -3750,7 +4028,7 @@ static int copy_range_fd(int in, int out, uint64_t off, uint64_t len) {
     return done == len ? 0 : -1;
 }
 
-static int cmd_lpmake(int argc, char **argv) {
+static int cmd_lpmake_impl(int argc, char **argv) {
     const char *type = "VAB", *group = "qti_dynamic_partitions"; int sparse = 0; double sz_in = 8.5;
     lpi_t *im = calloc(256, sizeof *im); int nim = 0;
     for (int i = 0; i < argc; i++) {
@@ -3854,6 +4132,7 @@ static int cmd_lpmake(int argc, char **argv) {
     snprintf(od, sizeof od, "%s/out", pro && *pro ? pro : ".");
     if (mkdir_p(od)) { fprintf(stderr, "> Error: cannot create %s\n", od); return 1; }
     snprintf(final, sizeof final, "%s/super.img", od); snprintf(tmpf, sizeof tmpf, "%s.tmp", final);
+    run_note("T", tmpf);
     sink_t k; memset(&k, 0, sizeof k); k.o = fopen(tmpf, "wb"); k.sparse = sparse;
     if (!k.o) { fprintf(stderr, "> Error: cannot write %s\n", tmpf); return 1; }
     if (sparse) { uint8_t z[28] = {0}; if (fwrite(z, 1, 28, k.o) != 28) k.err = 1; }
@@ -3863,6 +4142,7 @@ static int cmd_lpmake(int argc, char **argv) {
     uint64_t cur = reserved;
     uint8_t *buf = malloc(LP_COPY_BUF);
     for (int i = 0; i < np && !k.err; i++) {
+        if (g_stop) { k.err = 1; break; }
         if (!pp[i].size) continue;
         sk_gap(&k, pp[i].start - cur);
         printf("> Adding: %s (%llu KiB)\n", pp[i].name, (unsigned long long)(pp[i].size >> 10)); fflush(stdout);
@@ -3892,8 +4172,21 @@ static int cmd_lpmake(int argc, char **argv) {
     if (rc) { fprintf(stderr, "> Error: failed to write super image (disk full?)\n"); remove(tmpf); return 1; }
     if (!access(final, F_OK)) printf("> Replacing existing: %s\n", final);
     if (rename(tmpf, final)) { fprintf(stderr, "> Error: cannot write %s\n", final); return 1; }
+    run_note("O", final);
     printf("> Done: %s\n", final);
     return 0;
+}
+
+static int cmd_lpmake(int argc, char **argv) {
+    install_stop_handlers(); g_stop = 0;
+    const char *pro = getenv("DNA_PRO");
+    char od[4400]; snprintf(od, sizeof od, "%s/out", pro && *pro ? pro : ".");
+    mkdir_p(od);
+    run_register(od);
+    int rc = cmd_lpmake_impl(argc, argv);
+    if (g_stop) rc = run_abort_cleanup((int)g_stop);
+    else run_unregister();
+    return rc;
 }
 
 /* ---------- payload.bin dumper ---------- */
@@ -4929,6 +5222,7 @@ static int cmd_perf(int argc, char **argv) {
     if (bench) return perf_bench(&p);
     return 0;
 }
+
 
 /* ---------- dispatcher ---------- */
 
