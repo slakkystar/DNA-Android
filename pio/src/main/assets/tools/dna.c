@@ -4,6 +4,7 @@
  * assets/samples (shell scripts) (not derived from the original binary).
  *
  */
+#define _GNU_SOURCE
 #define _FILE_OFFSET_BITS 64
 #include <stdint.h>
 #include <stdarg.h>
