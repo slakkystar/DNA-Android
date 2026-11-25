@@ -2368,22 +2368,50 @@ static void fc_walk(fcx_ctx_t *c, const char *rel, int depth) {
     closedir(d);
 }
 
+static int fc_store_line(char ***lines, size_t *nl, size_t *lc, const char *s, size_t n) {
+    if (*nl == *lc) {
+        size_t nc = *lc ? *lc * 2 : 1024;
+        char **np = realloc(*lines, nc * sizeof *np);
+        if (!np) return -1;
+        *lines = np; *lc = nc;
+    }
+    char *v = malloc(n + 2);
+    if (!v) return -1;
+    memcpy(v, s, n);
+    v[n] = '\n'; v[n + 1] = 0;
+    (*lines)[(*nl)++] = v;
+    return 0;
+}
+
+static int fc_store_normalized(char ***lines, size_t *nl, size_t *lc, char *line, int *changed) {
+    size_t len = strlen(line);
+    int had_lf = len > 0 && line[len - 1] == '\n';
+    int had_cr = had_lf ? (len > 1 && line[len - 2] == '\r') : (len > 0 && line[len - 1] == '\r');
+    while (len && (line[len - 1] == '\n' || line[len - 1] == '\r')) line[--len] = 0;
+    if (!had_lf || had_cr) *changed = 1;
+    const char *start = line, *p = line;
+    while ((p = strstr(p, ":s0")) != NULL) {
+        const char *u = strstr(start, "u:object_r:");
+        if (!u || u > p) { p += 3; continue; }
+        const char *q = p + 3;
+        while (*q && *q != '/' && *q != ' ' && *q != '\t' && *q != '\r' && *q != '\n') q++;
+        if (*q != '/') { p += 3; continue; }
+        if (fc_store_line(lines, nl, lc, start, (size_t)(q - start))) return -1;
+        *changed = 1;
+        start = p = q;
+    }
+    return fc_store_line(lines, nl, lc, start, (size_t)(len - (size_t)(start - line)));
+}
+
 static void file_contexts_sync(const char *dro, const char *name, const char *tree, const char *fcx, int hal_fallback) {
     FILE *f = fopen(fcx, "r");
     if (!f) return;
     char **lines = NULL;
     size_t nl = 0, lc = 0;
+    int changed = 0;
     char line[8192];
     while (fgets(line, sizeof line, f)) {
-        if (nl == lc) {
-            size_t nc = lc ? lc * 2 : 1024;
-            char **np = realloc(lines, nc * sizeof *np);
-            if (!np) break;
-            lines = np; lc = nc;
-        }
-        lines[nl] = strdup(line);
-        if (!lines[nl]) break;
-        nl++;
+        if (fc_store_normalized(&lines, &nl, &lc, line, &changed)) break;
     }
     fclose(f);
 
@@ -2432,9 +2460,9 @@ static void file_contexts_sync(const char *dro, const char *name, const char *tr
         fc_walk(&c, "", 0);
         for (size_t i = 0; i < c.nadd; i++) fputs(c.adds[i], out);
         fclose(out);
-        if (removed || c.nadd) {
+        if (removed || c.nadd || changed) {
             if (rename(tmp, fcx)) { VWARN("> Warning: cannot update %s\n", fcx); remove(tmp); }
-            else VPRINTF("> Contexts: %zu added, %zu removed\n", c.nadd, removed);
+            else VPRINTF("> Contexts: %zu added, %zu removed%s\n", c.nadd, removed, changed ? ", normalized" : "");
         } else remove(tmp);
         for (size_t i = 0; i < c.nadd; i++) free(c.adds[i]);
         free(c.adds);
